@@ -1,0 +1,4 @@
+"""
+Analytics service tests.
+"""
+

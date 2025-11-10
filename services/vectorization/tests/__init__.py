@@ -1,0 +1,4 @@
+"""
+Vectorization service tests.
+"""
+

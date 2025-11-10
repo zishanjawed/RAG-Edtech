@@ -1,0 +1,285 @@
+version: '3.8'
+
+services:
+  # Infrastructure Services
+  mongodb:
+    image: mongo:7.0
+    container_name: rag-edtech-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-password123}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-rag_edtech}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    networks:
+      - rag-edtech-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: rag-edtech-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - rag-edtech-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: rag-edtech-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-password123}
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - rag-edtech-network
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Application Services
+  auth-service:
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
+    container_name: rag-edtech-auth
+    restart: unless-stopped
+    environment:
+      - MONGODB_URL=mongodb://${MONGO_USERNAME:-admin}:${MONGO_PASSWORD:-password123}@mongodb:27017/${MONGO_DATABASE:-rag_edtech}?authSource=admin
+      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+      - JWT_ALGORITHM=HS256
+      - ACCESS_TOKEN_EXPIRE_MINUTES=60
+      - REFRESH_TOKEN_EXPIRE_DAYS=7
+      - SERVICE_NAME=auth-service
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    ports:
+      - "8001:8000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - rag-edtech-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  document-processor:
+    build:
+      context: .
+      dockerfile: services/document-processor/Dockerfile
+    container_name: rag-edtech-document-processor
+    restart: unless-stopped
+    environment:
+      - MONGODB_URL=mongodb://${MONGO_USERNAME:-admin}:${MONGO_PASSWORD:-password123}@mongodb:27017/${MONGO_DATABASE:-rag_edtech}?authSource=admin
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASSWORD:-password123}@rabbitmq:5672/
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      - SERVICE_NAME=document-processor
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - MAX_FILE_SIZE_MB=50
+      - CHUNK_SIZE=512
+      - CHUNK_OVERLAP=50
+      - CHUNKING_STRATEGY=${CHUNKING_STRATEGY:-token_based}
+      - CHUNKING_MAX_TOKENS=${CHUNKING_MAX_TOKENS:-512}
+      - CHUNKING_MERGE_PEERS=${CHUNKING_MERGE_PEERS:-true}
+      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./uploads:/app/uploads
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - rag-edtech-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  vectorization-service:
+    build:
+      context: .
+      dockerfile: services/vectorization/Dockerfile
+    container_name: rag-edtech-vectorization
+    restart: unless-stopped
+    environment:
+      - MONGODB_URL=mongodb://${MONGO_USERNAME:-admin}:${MONGO_PASSWORD:-password123}@mongodb:27017/${MONGO_DATABASE:-rag_edtech}?authSource=admin
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASSWORD:-password123}@rabbitmq:5672/
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_ENVIRONMENT=${PINECONE_ENVIRONMENT}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-edtech-rag-index}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      - SERVICE_NAME=vectorization-service
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - BATCH_SIZE=100
+      - EMBEDDING_MODEL=text-embedding-3-large
+      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+    ports:
+      - "8003:8000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - rag-edtech-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  rag-query-service:
+    build:
+      context: .
+      dockerfile: services/rag-query/Dockerfile
+    container_name: rag-edtech-rag-query
+    restart: unless-stopped
+    environment:
+      - MONGODB_URL=mongodb://${MONGO_USERNAME:-admin}:${MONGO_PASSWORD:-password123}@mongodb:27017/${MONGO_DATABASE:-rag_edtech}?authSource=admin
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_ENVIRONMENT=${PINECONE_ENVIRONMENT}
+      - PINECONE_INDEX_NAME=${PINECONE_INDEX_NAME:-edtech-rag-index}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      - SERVICE_NAME=rag-query-service
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LLM_MODEL=gpt-4
+      - EMBEDDING_MODEL=text-embedding-3-large
+      - TOP_K_RESULTS=5
+      - CACHE_TTL_SECONDS=3600
+      - MAX_QUESTION_LENGTH=500
+      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+    ports:
+      - "8004:8000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - rag-edtech-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  analytics-service:
+    build:
+      context: .
+      dockerfile: services/analytics/Dockerfile
+    container_name: rag-edtech-analytics
+    restart: unless-stopped
+    environment:
+      - MONGODB_URL=mongodb://${MONGO_USERNAME:-admin}:${MONGO_PASSWORD:-password123}@mongodb:27017/${MONGO_DATABASE:-rag_edtech}?authSource=admin
+      - REDIS_URL=redis://redis:6379/1
+      - SERVICE_NAME=analytics-service
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - CACHE_TTL_SECONDS=300
+      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+    ports:
+      - "8005:8000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - rag-edtech-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: rag-edtech-api-gateway
+    restart: unless-stopped
+    environment:
+      - MONGODB_URL=mongodb://${MONGO_USERNAME:-admin}:${MONGO_PASSWORD:-password123}@mongodb:27017/${MONGO_DATABASE:-rag_edtech}?authSource=admin
+      - REDIS_URL=redis://redis:6379/2
+      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+      - JWT_ALGORITHM=HS256
+      - SERVICE_NAME=api-gateway
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - AUTH_SERVICE_URL=http://auth-service:8000
+      - DOCUMENT_PROCESSOR_URL=http://document-processor:8000
+      - VECTORIZATION_SERVICE_URL=http://vectorization-service:8000
+      - RAG_QUERY_SERVICE_URL=http://rag-query-service:8000
+      - ANALYTICS_SERVICE_URL=http://analytics-service:8000
+      - RATE_LIMIT_PER_USER=100
+      - RATE_LIMIT_GLOBAL=1000
+      - RATE_LIMIT_WINDOW_HOURS=1
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001,http://localhost:5173}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - auth-service
+      - document-processor
+      - vectorization-service
+      - rag-query-service
+      - analytics-service
+    networks:
+      - rag-edtech-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  rag-edtech-network:
+    driver: bridge
+    name: rag-edtech-network
+
+volumes:
+  mongodb_data:
+    name: rag-edtech-mongodb-data
+  mongodb_config:
+    name: rag-edtech-mongodb-config
+  redis_data:
+    name: rag-edtech-redis-data
+  rabbitmq_data:
+    name: rag-edtech-rabbitmq-data
+

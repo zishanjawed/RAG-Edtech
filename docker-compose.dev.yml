@@ -1,0 +1,85 @@
+version: '3.8'
+
+# Development overrides for docker-compose.yml
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  auth-service:
+    build:
+      context: ./services/auth
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      - ./services/auth:/app
+      - ./shared:/app/shared
+    environment:
+      - LOG_LEVEL=DEBUG
+      - RELOAD=true
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  document-processor:
+    build:
+      context: ./services/document-processor
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      - ./services/document-processor:/app
+      - ./shared:/app/shared
+      - ./uploads:/app/uploads
+    environment:
+      - LOG_LEVEL=DEBUG
+      - RELOAD=true
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  vectorization-service:
+    build:
+      context: ./services/vectorization
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      - ./services/vectorization:/app
+      - ./shared:/app/shared
+    environment:
+      - LOG_LEVEL=DEBUG
+      - RELOAD=true
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  rag-query-service:
+    build:
+      context: ./services/rag-query
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      - ./services/rag-query:/app
+      - ./shared:/app/shared
+    environment:
+      - LOG_LEVEL=DEBUG
+      - RELOAD=true
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  analytics-service:
+    build:
+      context: ./services/analytics
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      - ./services/analytics:/app
+      - ./shared:/app/shared
+    environment:
+      - LOG_LEVEL=DEBUG
+      - RELOAD=true
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      - ./services/api-gateway:/app
+      - ./shared:/app/shared
+    environment:
+      - LOG_LEVEL=DEBUG
+      - RELOAD=true
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
