@@ -17,6 +17,7 @@ from retrieval.pinecone_retriever import PineconeRetriever
 from llm.openai_client import OpenAIClient
 from cache.redis_cache import ResponseCache
 from models.schemas import QuestionRequest, QuestionResponse, SourceReference, GlobalChatRequest
+from prompts.educational_prompts import create_global_rag_prompt
 from config import settings
 from shared.database.mongodb_client import mongodb_client, get_mongodb
 from shared.database.redis_client import redis_client
@@ -85,7 +86,10 @@ async def startup_event():
         model=settings.llm_model
     )
     
-    cache = ResponseCache(ttl_seconds=settings.cache_ttl_seconds)
+    cache = ResponseCache(
+        ttl_seconds=settings.cache_ttl_seconds,
+        frequency_threshold=settings.cache_frequency_threshold
+    )
     
     # Initialize RAG pipeline
     rag_pipeline = RAGPipeline(retriever, llm_client, cache)
@@ -135,6 +139,209 @@ async def health_check():
         "mongodb": "connected" if mongo_healthy else "disconnected",
         "redis": "connected" if redis_healthy else "disconnected"
     }
+
+
+@app.post("/api/query/global/complete", response_model=QuestionResponse)
+async def global_chat_complete(
+    request_data: GlobalChatRequest,
+    request: Request,
+    db=Depends(get_mongodb)
+):
+    """
+    Global chat across multiple documents with @-mention support.
+    
+    Args:
+        request_data: Global chat request with optional selected_doc_ids
+        request: Request object
+        db: MongoDB database instance
+    
+    Returns:
+        Complete response with sources from multiple documents
+    """
+    from access_control import get_user_accessible_docs, filter_accessible_docs, get_completed_docs_for_search
+    
+    session_id = request.headers.get("X-Session-ID", str(uuid4()))
+    question_id = str(uuid4())
+    
+    logger.info(f"Global chat query by user {request_data.user_id}: {request_data.question[:100]}")
+    logger.info(f"[global_request] selected_doc_ids={getattr(request_data, 'selected_doc_ids', None)}")
+    
+    # Get user to determine role
+    user = await db.users.find_one({"user_id": request_data.user_id})
+    role = user.get("role", "student") if user else "student"
+    
+    # Read raw body to tolerate both snake_case and camelCase client payloads
+    try:
+        raw_body = await request.json()
+        selected_from_raw = raw_body.get("selected_doc_ids") or raw_body.get("selectedDocIds")
+    except Exception:
+        selected_from_raw = None
+    selected_ids = selected_from_raw or getattr(request_data, "selected_doc_ids", None) or []
+    
+    # Determine which documents to search
+    if selected_ids:
+        # User selected specific docs via @mentions - filter to accessible only
+        accessible_doc_ids = await filter_accessible_docs(
+            user_id=request_data.user_id,
+            doc_ids=selected_ids,
+            role=role
+        )
+        logger.info(f"[GLOBAL_CHAT] User selected {len(selected_ids)} docs, {len(accessible_doc_ids)} accessible")
+        # Filter to only completed documents for search
+        doc_ids = await get_completed_docs_for_search(accessible_doc_ids)
+        logger.info(f"[GLOBAL_CHAT] After filtering: {len(doc_ids)} completed docs")
+    else:
+        # Search all accessible documents
+        accessible_doc_ids = await get_user_accessible_docs(request_data.user_id, role)
+        logger.info(f"[GLOBAL_CHAT] Found {len(accessible_doc_ids)} accessible documents for user {request_data.user_id} (role: {role})")
+        logger.info(f"[GLOBAL_CHAT] Accessible doc IDs: {accessible_doc_ids[:5]}...")  # Log first 5 IDs
+        # Filter to only completed documents for search
+        doc_ids = await get_completed_docs_for_search(accessible_doc_ids)
+        logger.info(f"[GLOBAL_CHAT] Completed docs for search: {len(doc_ids)} (excluding {len(accessible_doc_ids) - len(doc_ids)} processing)")
+        logger.info(f"[GLOBAL_CHAT] Completed doc IDs: {doc_ids[:5]}...")  # Log first 5 IDs
+    
+    # Check if user has any accessible documents (including processing)
+    if not accessible_doc_ids:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=404,
+            detail="No accessible documents found. Please upload a document first."
+        )
+    
+    # If no completed documents but user has accessible docs, return helpful message
+    if not doc_ids:
+        processing_count = len(accessible_doc_ids) - len(doc_ids)
+        no_completed_message = f"""I found {len(accessible_doc_ids)} document(s) in your account, but {'they are' if processing_count > 1 else 'it is'} still being processed.
+
+**What's happening?**
+Your document(s) are being converted into searchable vectors. This usually takes 1-2 minutes after upload.
+
+**What to do:**
+1. Wait a moment and try again (processing continues in the background)
+2. Check your Documents page to see the processing status
+3. Once documents show "Ready" status, global chat will work automatically
+
+The global chat will be available as soon as your documents finish processing!"""
+        return QuestionResponse(
+            question_id=question_id,
+            content_id="global",
+            question=request_data.question,
+            answer=no_completed_message,
+            sources=[],
+            metadata={
+                "chunks_used": 0,
+                "documents_searched": 0,
+                "documents_processing": processing_count,
+                "response_time_ms": 0,
+            },
+            cached=False
+        )
+    
+    # If user specified docs, route directly to per-document pipeline for the explicitly selected doc
+    if selected_ids and len(selected_ids) >= 1:
+        # Prefer the explicitly selected first ID to match document chat behavior.
+        # Do NOT override it even if not present in filtered list to avoid encoding mismatch issues.
+        single_cid = selected_ids[0]
+        logger.info(f"[global_selected_doc] Using selected content_id={single_cid}")
+        result = await rag_pipeline.process_query(
+            content_id=single_cid,
+            question=request_data.question,
+            user_id=request_data.user_id,
+            session_id=session_id,
+            student_id=request_data.user_id,
+            metadata={}
+        )
+        return QuestionResponse(
+            question_id=question_id,
+            content_id="global",
+            question=request_data.question,
+            answer=result['response'],
+            sources=[SourceReference(**src) for src in result.get('sources', [])],
+            metadata={
+                **result['metadata'],
+                "documents_searched": 1
+            },
+            cached=result['cached']
+        )
+
+    # Delegate to isolated GlobalQueryService
+    import time
+    start_time = time.time()
+    from pipeline.global_query_service import GlobalQueryService
+    gqs = GlobalQueryService(rag_pipeline, create_global_rag_prompt)
+    answer, sources, metadata, diag = await gqs.run(
+        question_id=question_id,
+        user_id=request_data.user_id,
+        question=request_data.question,
+        doc_ids=doc_ids,
+        selected_doc_ids=request_data.selected_doc_ids or [],
+    )
+    total_time = int((time.time() - start_time) * 1000)
+    if not answer and len(sources) == 0:
+        no_vectors_message = f"""I couldn't find any searchable content in your {len(doc_ids)} document(s).
+
+**This usually means:**
+1. Your documents are still being processed (takes 1-2 minutes after upload)
+2. The documents may not have completed vectorization successfully
+
+**What to do:**
+1. **Check document status**: Go to your Documents page and verify all documents show "Ready" status
+2. **Wait and retry**: If documents show "Processing", wait 1-2 minutes and try again
+3. **Re-upload if needed**: If documents have been "Processing" for more than 5 minutes, try re-uploading them
+
+**For existing documents added via scripts**: Run the vectorization script to create searchable vectors:
+```bash
+python scripts/vectorize_seeded_docs.py
+```
+
+The global chat will work automatically once your documents are fully processed!"""
+        return QuestionResponse(
+            question_id=question_id,
+            content_id="global",
+            question=request_data.question,
+            answer=no_vectors_message,
+            sources=[],
+            metadata={
+                "chunks_used": 0,
+                "documents_searched": len(doc_ids),
+                "response_time_ms": total_time,
+                "llm_time_ms": metadata.get("llm_time_ms", 0),
+                "retrieval_time_ms": metadata.get("retrieval_time_ms", 0),
+                "tokens_used": metadata.get("tokens_used", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
+                "model": metadata.get("model", "gpt-4"),
+                "diagnostics": diag.to_dict()
+            },
+            cached=False
+        )
+    # Persist and return successful response
+    question_doc = {
+        "question_id": question_id,
+        "session_id": session_id,
+        "student_id": request_data.user_id,
+        "question_text": request_data.question,
+        "answer_text": answer,
+        "timestamp": datetime.utcnow(),
+        "response_time_ms": total_time,
+        "cached": False,
+        "is_global": True,
+        "searched_doc_ids": doc_ids,
+        "documents_searched": len(doc_ids),
+        "selected_doc_ids": request_data.selected_doc_ids or []
+    }
+    await db.questions.insert_one(question_doc)
+    return QuestionResponse(
+        question_id=question_id,
+        content_id="global",
+        question=request_data.question,
+        answer=answer,
+        sources=[SourceReference(**src) for src in sources],
+        metadata={
+            **metadata,
+            "response_time_ms": total_time,
+            "diagnostics": diag.to_dict()
+        },
+        cached=False
+    )
 
 
 @app.post("/api/query/{content_id}")
@@ -289,182 +496,81 @@ async def ask_question_complete(
     )
 
 
-@app.post("/api/query/global/complete", response_model=QuestionResponse)
-async def global_chat_complete(
-    request_data: GlobalChatRequest,
-    request: Request,
-    db=Depends(get_mongodb)
+@app.get("/api/query/{content_id}/popular")
+async def get_popular_questions(
+    content_id: str,
+    limit: int = 10,
+    offset: int = 0
 ):
     """
-    Global chat across multiple documents with @-mention support.
+    Get popular questions for a document based on frequency.
     
     Args:
-        request_data: Global chat request with optional selected_doc_ids
-        request: Request object
-        db: MongoDB database instance
+        content_id: Content ID to get popular questions for
+        limit: Maximum number of questions to return (default: 10)
     
     Returns:
-        Complete response with sources from multiple documents
+        List of popular questions with their frequencies
     """
-    from access_control import get_user_accessible_docs, filter_accessible_docs
-    
-    session_id = request.headers.get("X-Session-ID", str(uuid4()))
-    question_id = str(uuid4())
-    
-    logger.info(f"Global chat query by user {request_data.user_id}: {request_data.question[:100]}")
-    
-    # Get user to determine role
-    user = await db.users.find_one({"user_id": request_data.user_id})
-    role = user.get("role", "student") if user else "student"
-    
-    # Determine which documents to search
-    if request_data.selected_doc_ids:
-        # User selected specific docs via @mentions - filter to accessible only
-        doc_ids = await filter_accessible_docs(
-            user_id=request_data.user_id,
-            doc_ids=request_data.selected_doc_ids,
-            role=role
-        )
-        logger.info(f"User selected {len(request_data.selected_doc_ids)} docs, {len(doc_ids)} accessible")
-    else:
-        # Search all accessible documents
-        doc_ids = await get_user_accessible_docs(request_data.user_id, role)
-        logger.info(f"Searching across {len(doc_ids)} accessible documents")
-    
-    if not doc_ids:
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=404,
-            detail="No accessible documents found. Please upload a document first."
-        )
-    
-    # Query Pinecone with content_id filter
-    import time
-    start_time = time.time()
-    
-    # Get embeddings for question
-    retrieval_start = time.time()
-    query_embedding = await rag_pipeline.llm_client.embedder.embed_query(request_data.question)
-    
-    # Query with filter for multiple documents
-    results = await rag_pipeline.retriever.search_global(
-        query_vector=query_embedding,
-        content_ids=doc_ids,
-        top_k=10  # Get more results for global search
-    )
-    
-    retrieval_time = int((time.time() - retrieval_start) * 1000)
-    
-    # Diversify results (max 2 chunks per document, 8 total)
-    diverse_results = diversify_search_results(results, max_per_doc=2, max_total=8)
-    
-    logger.info(f"Retrieved {len(diverse_results)} diverse chunks from {len(set(r.metadata.get('content_id') for r in diverse_results)) if diverse_results else 0} documents")
-    
-    # If no results found, return helpful message
-    if not diverse_results or len(diverse_results) == 0:
-        no_vectors_message = f"""I couldn't find any searchable content in your {len(doc_ids)} document(s).
-
-**To enable global chat:**
-1. Upload documents through the "Upload New" button
-2. Wait for each to finish processing (you'll see "Ready" status)
-3. Documents with vectors are searchable
-4. Then global chat will work across all your documents!
-
-**Currently:** Your documents exist in the database but haven't been vectorized yet. Upload them through the UI to create searchable vectors."""
+    try:
+        from shared.database.redis_client import redis_client
+        import hashlib
         
-        total_time = int((time.time() - start_time) * 1000)
+        # Get all frequency keys for this content
+        pattern = f"rag_frequency:{content_id}:*"
         
-        return QuestionResponse(
-            question_id=question_id,
-            content_id="global",
-            question=request_data.question,
-            answer=no_vectors_message,
-            sources=[],
-            metadata={
-                "chunks_used": 0,
-                "documents_searched": len(doc_ids),
-                "response_time_ms": total_time,
-                "llm_time_ms": 0,
-                "retrieval_time_ms": retrieval_time,
-                "tokens_used": {
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "total_tokens": 0
-                },
-                "model": "gpt-4-0613"
-            },
-            cached=False
-        )
-    
-    # Build context from diverse results
-    context = "\n\n---\n\n".join([
-        f"[Source {i+1} - {r.metadata.get('document_title', 'Unknown')}]\n{r.metadata['text']}"
-        for i, r in enumerate(diverse_results)
-    ])
-    
-    # Generate answer
-    llm_start = time.time()
-    from prompts.educational_prompts import create_global_rag_prompt
-    
-    prompt = create_global_rag_prompt(context, request_data.question, len(doc_ids))
-    
-    answer = await rag_pipeline.llm_client.generate_completion(prompt)
-    llm_time = int((time.time() - llm_start) * 1000)
-    
-    # Format sources
-    sources = []
-    for i, result in enumerate(diverse_results):
-        sources.append(SourceReference(
-            source_id=i + 1,
-            document_title=result.metadata.get('document_title', 'Unknown'),
-            uploader_name=result.metadata.get('uploader_name', 'Unknown'),
-            uploader_id=result.metadata.get('uploader_id', ''),
-            upload_date=result.metadata.get('upload_date', '').split('T')[0] if result.metadata.get('upload_date') else '',
-            chunk_index=result.metadata.get('chunk_index', 0),
-            similarity_score=result.score
-        ))
-    
-    total_time = int((time.time() - start_time) * 1000)
-    
-    # Store question in MongoDB
-    question_doc = {
-        "question_id": question_id,
-        "session_id": session_id,
-        "student_id": request_data.user_id,
-        "question_text": request_data.question,
-        "answer_text": answer,
-        "timestamp": datetime.utcnow(),
-        "response_time_ms": total_time,
-        "cached": False,
-        "is_global": True,
-        "searched_doc_ids": doc_ids,
-        "documents_searched": len(doc_ids),
-        "selected_doc_ids": request_data.selected_doc_ids or []
-    }
-    
-    await db.questions.insert_one(question_doc)
-    
-    return QuestionResponse(
-        question_id=question_id,
-        content_id="global",  # Special marker for global queries
-        question=request_data.question,
-        answer=answer,
-        sources=sources,
-        metadata={
-            "chunks_used": len(diverse_results),
-            "documents_searched": len(doc_ids),
-            "response_time_ms": total_time,
-            "llm_time_ms": llm_time,
-            "retrieval_time_ms": retrieval_time,
-            "tokens_used": {
-                "prompt_tokens": len(prompt.split()) * 1.3,  # Rough estimate
-                "completion_tokens": len(answer.split()) * 1.3,
-                "total_tokens": (len(prompt) + len(answer)) // 4
-            },
-            "model": "gpt-4-0613"
-        },
-        cached=False
-    )
+        # Note: In production, you'd use SCAN for large key sets
+        # For now, we'll retrieve questions from MongoDB and check their frequencies
+        questions_data = []
+        
+        # Get unique questions from MongoDB for this content
+        db = mongodb_client.get_database()
+        unique_questions = await db.questions.aggregate([
+            {"$match": {"content_id": content_id}},
+            {"$group": {
+                "_id": "$question_text",
+                "count": {"$sum": 1}
+            }},
+            {"$sort": {"count": -1}},
+            {"$skip": offset},
+            {"$limit": limit * 2}  # Get more to account for filtering
+        ]).to_list(limit * 2)
+        
+        # For each question, get its frequency from Redis and check if cached
+        for q in unique_questions:
+            question_text = q['_id']
+            
+            # Get frequency from Redis (SHA-256 for security)
+            question_hash = hashlib.sha256(question_text.lower().encode()).hexdigest()
+            frequency_key = f"rag_frequency:{content_id}:{question_hash}"
+            cache_key = f"rag_cache:{content_id}:{question_hash}"
+            
+            try:
+                frequency = await redis_client.get(frequency_key)
+                frequency = int(frequency) if frequency else 0
+                
+                # Check if cached
+                is_cached = await redis_client.exists(cache_key)
+                
+                if frequency > 0:  # Only include questions with frequency tracking
+                    questions_data.append({
+                        "question": question_text,
+                        "frequency": frequency,
+                        "is_cached": is_cached
+                    })
+            except Exception as e:
+                logger.error(f"Failed to get frequency for question: {str(e)}")
+                continue
+        
+        # Sort by frequency and limit
+        questions_data.sort(key=lambda x: x['frequency'], reverse=True)
+        questions_data = questions_data[:limit]
+        
+        return {"popular_questions": questions_data, "total": len(questions_data)}
+        
+    except Exception as e:
+        logger.error(f"Failed to get popular questions: {str(e)}")
+        return {"popular_questions": [], "total": 0}
 
 
 def diversify_search_results(results, max_per_doc=2, max_total=8):

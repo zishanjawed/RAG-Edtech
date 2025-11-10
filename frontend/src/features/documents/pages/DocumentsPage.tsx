@@ -69,8 +69,18 @@ export function DocumentsPage() {
   }
 
   const handleUploadComplete = (document: Document) => {
+    // Add document optimistically to the list
     setDocuments((prev) => [document, ...prev])
-    setUploadDialogOpen(false)
+    
+    // Reload after 3 seconds to get updated status from backend
+    setTimeout(() => {
+      loadDocuments()
+    }, 3000)
+    
+    // Also reload after 10 seconds in case processing is slow
+    setTimeout(() => {
+      loadDocuments()
+    }, 10000)
   }
 
   const handleGlobalChatClick = () => {

@@ -16,9 +16,10 @@ import { documentsService } from '@/api/documents.service'
 import { ChatPageSkeleton } from '../components/ChatSkeleton'
 import { TypingIndicator } from '../components/TypingIndicator'
 import { MessageBubble } from '../components/MessageBubble'
+import { PopularQuestions } from '../components/PopularQuestions'
 import { SourceCitations } from '../components/SourceCitations'
 import { useToast } from '@/hooks/useToast'
-import type { Document, SourceReference } from '@/api/types'
+import type { Document, SourceReference, PopularQuestion } from '@/api/types'
 
 export function ChatPage() {
   const { documentId } = useParams<{ documentId: string }>()
@@ -27,6 +28,8 @@ export function ChatPage() {
   const [isLoadingDoc, setIsLoadingDoc] = useState(true)
   const [useSourcesMode, setUseSourcesMode] = useState(false)
   const [isLoadingComplete, setIsLoadingComplete] = useState(false)
+  const [popularQuestions, setPopularQuestions] = useState<PopularQuestion[]>([])
+  const [loadingPopular, setLoadingPopular] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const { user } = useAuth()
   const { toast } = useToast()
@@ -44,8 +47,23 @@ export function ChatPage() {
         .catch((err) => {
           setIsLoadingDoc(false)
         })
+      
+      // Load popular questions
+      loadPopularQuestions(documentId)
     }
   }, [documentId])
+
+  const loadPopularQuestions = async (id: string) => {
+    try {
+      setLoadingPopular(true)
+      const questions = await chatService.getPopularQuestions(id, 10)
+      setPopularQuestions(questions)
+    } catch (error) {
+      setPopularQuestions([])
+    } finally {
+      setLoadingPopular(false)
+    }
+  }
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -150,19 +168,30 @@ export function ChatPage() {
       <ScrollArea className="flex-1 bg-slate-50 px-6 py-6">
         <div className="mx-auto max-w-4xl space-y-6">
           {messages.length === 0 && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="text-center"
-            >
-              <div className="inline-flex rounded-full bg-primary-100 p-4 mb-4">
-                <BookOpen className="h-8 w-8 text-primary-600" />
-              </div>
-              <h2 className="text-2xl font-bold text-slate-900 mb-2">Ask Me Anything</h2>
-              <p className="text-slate-600">
-                Start by asking a question about {document.title}
-              </p>
-            </motion.div>
+            <div className="space-y-6">
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="text-center"
+              >
+                <div className="inline-flex rounded-full bg-primary-100 p-4 mb-4">
+                  <BookOpen className="h-8 w-8 text-primary-600" />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-900 mb-2">Ask Me Anything</h2>
+                <p className="text-slate-600">
+                  Start by asking a question about {document.title}
+                </p>
+              </motion.div>
+              
+              {/* Popular Questions */}
+              {(popularQuestions.length > 0 || loadingPopular) && (
+                <PopularQuestions
+                  questions={popularQuestions}
+                  onQuestionClick={(question) => setInput(question)}
+                  isLoading={loadingPopular}
+                />
+              )}
+            </div>
           )}
 
           <AnimatePresence mode="popLayout">

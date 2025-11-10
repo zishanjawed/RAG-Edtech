@@ -4,11 +4,24 @@
  */
 
 /**
+ * Parse an API date string safely.
+ * Many backend dates are ISO without timezone (naive UTC). JS treats those as local time.
+ * This helper assumes UTC when the timezone is missing to avoid timezone drift (e.g., -6h).
+ */
+export function parseApiDate(date: Date | string): Date {
+  if (date instanceof Date) return date
+  if (!date) return new Date(NaN)
+  const hasTimezone = /([zZ]|[+-]\d{2}:\d{2})$/.test(date)
+  const normalized = hasTimezone ? date : `${date}Z`
+  return new Date(normalized)
+}
+
+/**
  * Format date to readable string
  * @example formatDate(new Date()) => "Nov 7, 2025"
  */
 export function formatDate(date: Date | string): string {
-  const d = typeof date === 'string' ? new Date(date) : date
+  const d = parseApiDate(date)
   return d.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
@@ -21,7 +34,7 @@ export function formatDate(date: Date | string): string {
  * @example formatDateTime(new Date()) => "Nov 7, 2025 at 2:30 PM"
  */
 export function formatDateTime(date: Date | string): string {
-  const d = typeof date === 'string' ? new Date(date) : date
+  const d = parseApiDate(date)
   return d.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
@@ -36,7 +49,7 @@ export function formatDateTime(date: Date | string): string {
  * @example formatRelativeTime(Date.now() - 60000) => "1 minute ago"
  */
 export function formatRelativeTime(date: Date | string): string {
-  const d = typeof date === 'string' ? new Date(date) : date
+  const d = parseApiDate(date)
   const now = new Date()
   const seconds = Math.floor((now.getTime() - d.getTime()) / 1000)
 

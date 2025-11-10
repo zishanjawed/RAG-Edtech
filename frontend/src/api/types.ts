@@ -153,7 +153,9 @@ export interface ChatMessage {
     response_time_ms?: number
     tokens_used?: number
     model?: string
+    question_frequency?: number
   }
+  cached?: boolean
 }
 
 export interface Source {
@@ -201,6 +203,7 @@ export interface QuestionResponse {
       total_tokens: number
     }
     model: string
+    question_frequency?: number
   }
   cached: boolean
 }
@@ -219,6 +222,13 @@ export interface SuggestedPrompt {
   text: string
   category?: 'definition' | 'explanation' | 'comparison' | 'procedure' | 'application' | 'evaluation'
   icon?: string
+}
+
+// Popular Questions
+export interface PopularQuestion {
+  question: string
+  frequency: number
+  is_cached: boolean
 }
 
 // Global Chat types
@@ -360,6 +370,8 @@ export interface TeacherOverview {
 
 export interface StudentActivity {
   student_id: string
+  student_name?: string
+  student_email?: string
   total_questions: number
   unique_content: number
   avg_response_time: number

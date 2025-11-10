@@ -23,14 +23,20 @@ class GlobalChatRequest(BaseModel):
     """Request model for global chat across documents."""
     question: str = Field(..., min_length=1, max_length=500, description="The question to ask")
     user_id: str = Field(..., description="User ID asking the question")
-    selected_doc_ids: Optional[List[str]] = Field(default=None, description="Optional list of document IDs to narrow search")
+    # Accept both snake_case and camelCase payloads
+    selected_doc_ids: Optional[List[str]] = Field(
+        default=None,
+        alias="selectedDocIds",
+        description="Optional list of document IDs to narrow search"
+    )
     
     class Config:
+        allow_population_by_field_name = True
         json_schema_extra = {
             "example": {
                 "question": "Compare stoichiometry concepts across my documents",
                 "user_id": "user123",
-                "selected_doc_ids": ["doc1", "doc2"]
+                "selectedDocIds": ["doc1", "doc2"]
             }
         }
 

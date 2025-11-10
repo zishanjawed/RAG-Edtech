@@ -102,14 +102,27 @@ class RAGPipeline:
                 sanitized_question = self.filter.validate_question(question)
                 validation_obs.set_output({"sanitized_question": sanitized_question, "is_safe": True})
             
-            # 2. Check cache
+            # 2. Increment question frequency
+            with langfuse_client.create_observation(
+                name="track_frequency",
+                trace_id=trace.id if trace else None,
+                input_data={"content_id": content_id, "question": sanitized_question}
+            ) as freq_obs:
+                frequency = await self.cache.increment_question_frequency(content_id, sanitized_question)
+                freq_obs.set_output({"frequency": frequency, "threshold": self.cache.frequency_threshold})
+            
+            # 3. Check cache
             with langfuse_client.create_observation(
                 name="check_cache",
                 trace_id=trace.id if trace else None,
                 input_data={"content_id": content_id, "question": sanitized_question}
             ) as cache_obs:
                 cached_response = await self.cache.get_cached_response(content_id, sanitized_question)
-                cache_obs.set_output({"cache_hit": cached_response is not None})
+                cache_obs.set_output({
+                    "cache_hit": cached_response is not None,
+                    "frequency": frequency,
+                    "meets_threshold": frequency >= self.cache.frequency_threshold
+                })
             
             if cached_response:
                 logger.info("Returning cached response")
@@ -135,7 +148,7 @@ class RAGPipeline:
                 
                 return
             
-            # 3. Generate query embedding
+            # 4. Generate query embedding
             with langfuse_client.create_observation(
                 name="generate_query_embedding",
                 trace_id=trace.id if trace else None,
@@ -145,7 +158,7 @@ class RAGPipeline:
                 query_embedding = await self.llm_client.generate_embedding(sanitized_question)
                 embedding_obs.set_output({"embedding_dimension": len(query_embedding)})
             
-            # 4. Retrieve relevant chunks
+            # 5. Retrieve relevant chunks
             with langfuse_client.create_observation(
                 name="retrieve_chunks",
                 trace_id=trace.id if trace else None,
@@ -199,9 +212,15 @@ class RAGPipeline:
             if not chunks or len(chunks) == 0:
                 no_vectors_message = """I don't have searchable content for this document yet.
 
-To enable chat: Upload this document through the "Upload New" button, wait for processing (1-2 min), then chat will work!
+**What's happening?**
+This document is still being processed and indexed. This usually takes 1-2 minutes after upload.
 
-Why: Documents need to be vectorized before I can search and answer questions."""
+**What to do:**
+1. Wait a moment and try again (processing continues in the background)
+2. Check if the document status shows "Ready" in your documents list
+3. If it's been more than 5 minutes, the document may need to be re-uploaded
+
+**Why this happens:** Documents need to be converted into searchable vectors before I can answer questions about them. This is a one-time process that happens automatically after upload."""
                 
                 # Yield the message word by word for streaming effect
                 words = no_vectors_message.split()
@@ -210,10 +229,10 @@ Why: Documents need to be vectorized before I can search and answer questions.""
                     await asyncio.sleep(0.05)  # Small delay for streaming effect
                 return
             
-            # 5. Create prompt with context
+            # 6. Create prompt with context
             messages = create_rag_prompt(sanitized_question, chunks)
             
-            # 6. Generate streaming response
+            # 7. Generate streaming response
             response_text = ""
             generation_start = time.time()
             
@@ -259,11 +278,11 @@ Why: Documents need to be vectorized before I can search and answer questions.""
                 except Exception as e:
                     logger.warning(f"Failed to update generation span: {str(e)}")
             
-            # 7. Validate response safety
+            # 8. Validate response safety
             if not self.filter.check_response_safety(response_text):
                 logger.warning("Unsafe response detected, not caching")
             else:
-                # 8. Cache response
+                # 9. Cache response
                 response_time = time.time() - start_time
                 
                 await self.cache.cache_response(
@@ -272,7 +291,8 @@ Why: Documents need to be vectorized before I can search and answer questions.""
                     response=response_text,
                     metadata={
                         "chunks_used": len(chunks),
-                        "response_time_ms": int(response_time * 1000)
+                        "response_time_ms": int(response_time * 1000),
+                        "question_frequency": frequency
                     }
                 )
             
@@ -382,6 +402,15 @@ Why: Documents need to be vectorized before I can search and answer questions.""
                 sanitized_question = self.filter.validate_question(question)
                 validation_obs.set_output({"sanitized_question": sanitized_question, "is_safe": True})
             
+            # Increment question frequency
+            with langfuse_client.create_observation(
+                name="track_frequency",
+                trace_id=trace.id if trace else None,
+                input_data={"content_id": content_id, "question": sanitized_question}
+            ) as freq_obs:
+                frequency = await self.cache.increment_question_frequency(content_id, sanitized_question)
+                freq_obs.set_output({"frequency": frequency, "threshold": self.cache.frequency_threshold})
+            
             # Check cache
             with langfuse_client.create_observation(
                 name="check_cache",
@@ -389,7 +418,11 @@ Why: Documents need to be vectorized before I can search and answer questions.""
                 input_data={"content_id": content_id, "question": sanitized_question}
             ) as cache_obs:
                 cached_response = await self.cache.get_cached_response(content_id, sanitized_question)
-                cache_obs.set_output({"cache_hit": cached_response is not None})
+                cache_obs.set_output({
+                    "cache_hit": cached_response is not None,
+                    "frequency": frequency,
+                    "meets_threshold": frequency >= self.cache.frequency_threshold
+                })
             
             if cached_response:
                 # Update trace with cache hit info
@@ -430,21 +463,31 @@ Why: Documents need to be vectorized before I can search and answer questions.""
                 if chunks:
                     scores = [chunk.get('score', 0) for chunk in chunks]
                     avg_score = sum(scores) / len(scores) if scores else 0
+                    max_score = max(scores) if scores else 0
+                    min_score = min(scores) if scores else 0
                     chunk_ids = [chunk.get('id', f'chunk_{i}') for i, chunk in enumerate(chunks)]
                     
+                    retrieval_quality = "excellent" if avg_score >= 0.8 else "good" if avg_score >= 0.6 else "moderate" if avg_score >= 0.4 else "poor"
+                    
                     logger.info(
-                        f"[OK] Retrieved {len(chunks)} chunks (avg score: {avg_score:.3f})",
+                        f"[OK] Retrieved {len(chunks)} chunks | Avg score: {avg_score:.3f} | Max score: {max_score:.3f} | Min score: {min_score:.3f}",
                         extra={
                             "content_id": content_id,
                             "chunks_retrieved": len(chunks),
-                            "avg_similarity": round(avg_score, 3)
+                            "avg_similarity": round(avg_score, 3),
+                            "max_similarity": round(max_score, 3),
+                            "min_similarity": round(min_score, 3),
+                            "retrieval_quality": retrieval_quality
                         }
                     )
                     
                     retrieval_obs.set_output({
                         "chunks_retrieved": len(chunks),
                         "avg_similarity": round(avg_score, 3),
-                        "chunk_ids": chunk_ids
+                        "max_similarity": round(max_score, 3),
+                        "min_similarity": round(min_score, 3),
+                        "chunk_ids": chunk_ids,
+                        "retrieval_quality": retrieval_quality
                     })
                 else:
                     # No chunks found - document not vectorized
@@ -455,13 +498,15 @@ Why: Documents need to be vectorized before I can search and answer questions.""
             if not chunks or len(chunks) == 0:
                 no_vectors_response = """I don't have searchable content for this document yet.
 
-**To enable chat with this document:**
-1. This document needs to be uploaded through the "Upload New" button
-2. The system will process and vectorize it (takes 1-2 minutes)
-3. You'll see a "Ready" status badge when complete
-4. Then you can ask questions and I'll provide answers with sources!
+**What's happening?**
+This document is still being processed and indexed. This usually takes 1-2 minutes after upload.
 
-**Why this happens:** Documents need to be converted into searchable vectors before I can find relevant information. Directly added database entries don't have these vectors yet."""
+**What to do:**
+1. Wait a moment and try again (processing continues in the background)
+2. Check if the document status shows "Ready" in your documents list
+3. If it's been more than 5 minutes, the document may need to be re-uploaded
+
+**Why this happens:** Documents need to be converted into searchable vectors before I can answer questions about them. This is a one-time process that happens automatically after upload."""
                 
                 response_time = time.time() - start_time
                 return {
@@ -566,7 +611,8 @@ Why: Documents need to be vectorized before I can search and answer questions.""
                     "response_time_ms": int(response_time * 1000),
                     "llm_time_ms": int(gen_time * 1000),
                     "tokens_used": response_data['usage'],
-                    "model": response_data['model']
+                    "model": response_data['model'],
+                    "question_frequency": frequency
                 },
                 "cached": False
             }

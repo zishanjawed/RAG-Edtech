@@ -121,14 +121,14 @@ export function TeacherDashboard() {
   }))
 
   return (
-    <PageShell className="py-6 space-y-6">
+    <PageShell className="py-6 space-y-8">
       {/* Header */}
       <TextReveal>
         <PageHeader
           title="Dashboard"
           description={`Welcome back! Here's what's happening with your class • ${user?.email ?? ''}`}
           actions={
-            <Button variant="default" className="gap-2">
+            <Button variant="default" className="gap-2" disabled>
               <Plus className="h-4 w-4" />
               New Assignment
             </Button>

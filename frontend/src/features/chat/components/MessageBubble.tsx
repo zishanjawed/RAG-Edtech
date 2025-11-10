@@ -3,6 +3,7 @@
  * Enhanced message display with animations
  */
 import { motion } from 'framer-motion'
+import { Zap, BarChart3 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { MarkdownRenderer } from '@/components/ui/MarkdownRenderer'
 
@@ -11,6 +12,13 @@ interface Message {
   role: 'user' | 'assistant'
   content: string
   isStreaming?: boolean
+  cached?: boolean
+  metadata?: {
+    question_frequency?: number
+    response_time_ms?: number
+    tokens_used?: number
+    model?: string
+  }
 }
 
 interface MessageBubbleProps {
@@ -61,6 +69,24 @@ export function MessageBubble({ message, index }: MessageBubbleProps) {
       >
         <Card.Body>
           <MarkdownRenderer content={message.content} />
+          
+          {/* Cache and Frequency Badges */}
+          {!message.isStreaming && (message.cached || message.metadata?.question_frequency) && (
+            <div className="flex items-center gap-2 mt-3 pt-3 border-t border-slate-200">
+              {message.cached && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-700 text-xs font-medium">
+                  <Zap className="h-3 w-3" />
+                  Cached
+                </span>
+              )}
+              {message.metadata?.question_frequency && message.metadata.question_frequency > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">
+                  <BarChart3 className="h-3 w-3" />
+                  Asked {message.metadata.question_frequency}x
+                </span>
+              )}
+            </div>
+          )}
         </Card.Body>
       </Card>
     </motion.div>

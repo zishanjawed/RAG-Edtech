@@ -32,6 +32,8 @@ import { PageHeader } from '@/components/layout/PageHeader'
 
 interface StudentRow {
   student_id: string
+  student_name?: string
+  student_email?: string
   total_questions: number
   unique_content: number
   avg_response_time: number
@@ -68,6 +70,8 @@ export function StudentListPage() {
   const students: StudentRow[] = data?.students
     .map((s) => ({
       student_id: s.student_id || '',
+      student_name: s.student_name,
+      student_email: s.student_email,
       total_questions: s.total_questions || 0,
       unique_content: s.unique_content || 0,
       avg_response_time: s.avg_response_time || 0,
@@ -76,7 +80,11 @@ export function StudentListPage() {
       status: (s.status as 'active' | 'inactive') || 'inactive',
     }))
     .filter((s) => {
-      const matchesSearch = s.student_id.toLowerCase().includes(searchQuery.toLowerCase())
+      const searchLower = searchQuery.toLowerCase()
+      const matchesSearch = 
+        s.student_id.toLowerCase().includes(searchLower) ||
+        s.student_name?.toLowerCase().includes(searchLower) ||
+        s.student_email?.toLowerCase().includes(searchLower)
       const matchesStatus = statusFilter === 'all' || s.status === statusFilter
       return matchesSearch && matchesStatus
     }) || []
@@ -104,7 +112,7 @@ export function StudentListPage() {
           <p className="text-sm text-muted-foreground mt-2 text-center max-w-sm">
             Student activity will appear here once they start asking questions
           </p>
-          <Button className="mt-6 gap-2">
+          <Button className="mt-6 gap-2" disabled>
             <UserPlus className="h-4 w-4" />
             Add First Student
           </Button>
@@ -119,7 +127,7 @@ export function StudentListPage() {
         title="Students"
         description={`Manage and monitor student activity (${data.total_count} total)`}
         actions={
-          <Button className="gap-2">
+          <Button className="gap-2" disabled>
             <UserPlus className="h-4 w-4" />
             Add Student
           </Button>
@@ -200,7 +208,9 @@ export function StudentListPage() {
                         className="bg-primary/10 text-primary"
                       />
                       <div>
-                        <div className="font-medium">{student.student_name || `Student ${student.student_id.slice(0, 8)}`}</div>
+                        <div className="font-medium">
+                          {student.student_name || `student:${student.student_id.slice(0, 8)}`}
+                        </div>
                         <div className="text-sm text-muted-foreground">
                           {student.student_email || `ID: ${student.student_id.slice(0, 12)}...`}
                         </div>
@@ -261,14 +271,16 @@ export function StudentListPage() {
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <Avatar
-                      name={getInitials(student.student_id)}
+                      name={student.student_name || getInitials(student.student_id)}
                       size="md"
                       className="bg-primary/10 text-primary"
                     />
                     <div>
-                      <div className="font-medium">Student {student.student_id.slice(0, 8)}</div>
+                      <div className="font-medium">
+                        {student.student_name || `student:${student.student_id.slice(0, 8)}`}
+                      </div>
                       <div className="text-xs text-muted-foreground">
-                        {student.student_id.slice(0, 16)}...
+                        {student.student_email || `ID: ${student.student_id.slice(0, 16)}...`}
                       </div>
                     </div>
                   </div>

@@ -254,9 +254,9 @@ async def upload_content(
     
     # Validate file type
     file_extension = file.filename.split('.')[-1].lower()
-    if file_extension not in ['pdf', 'md', 'txt']:
+    if file_extension not in ['pdf', 'md', 'txt', 'docx', 'doc']:
         raise FileValidationError(
-            "Unsupported file type. Allowed types: PDF, MD, TXT",
+            "Unsupported file type. Allowed types: PDF, MD, TXT, DOCX",
             details={"filename": file.filename, "extension": file_extension}
         )
     
@@ -592,6 +592,52 @@ async def get_content_status(content_id: str, db=Depends(get_mongodb)):
     }
 
 
+@app.get("/api/content/{content_id}")
+async def get_content(content_id: str, db=Depends(get_mongodb)):
+    """
+    Get a single document by content_id.
+    
+    Args:
+        content_id: Content ID
+        db: MongoDB database instance
+    
+    Returns:
+        Document information
+    """
+    content = await db.content.find_one({"content_id": content_id})
+    
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Content with ID {content_id} not found"
+        )
+    
+    # Remove MongoDB ObjectId
+    if "_id" in content:
+        del content["_id"]
+    
+    # Convert datetime fields
+    for date_field in ["upload_date", "updated_at", "original_upload_date"]:
+        if date_field in content and hasattr(content[date_field], "isoformat"):
+            content[date_field] = content[date_field].isoformat()
+    
+    # Format upload history dates
+    if "upload_history" in content:
+        for entry in content["upload_history"]:
+            if "upload_date" in entry and hasattr(entry["upload_date"], "isoformat"):
+                entry["upload_date"] = entry["upload_date"].isoformat()
+    
+    # Add frontend-friendly fields
+    content["chunks_count"] = content.get("total_chunks", 0)
+    metadata = content.get("metadata", {})
+    content["title"] = metadata.get("title", content.get("filename", "Untitled"))
+    content["subject"] = metadata.get("subject", "General")
+    content["grade_level"] = metadata.get("grade_level", "N/A")
+    content["uploader_name"] = metadata.get("uploader_name", "Unknown")
+    
+    return content
+
+
 @app.get("/api/content/user/{user_id}")
 async def get_user_documents(
     user_id: str,
@@ -632,10 +678,16 @@ async def get_user_documents(
             "user_id": {"$ne": user_id}
         }
     else:  # all
+        # Get all teacher IDs for student access
+        teachers = await db.users.find({"role": "teacher"}, {"user_id": 1}).to_list(length=None)
+        teacher_ids = [t["user_id"] for t in teachers]
+        
         base_query = {
             "$or": [
-                {"user_id": user_id},
-                {"upload_history.user_id": user_id}
+                {"user_id": user_id},  # Student owns
+                {"upload_history.user_id": user_id},  # Student uploaded
+                {"user_id": {"$in": teacher_ids}},  # Teacher uploaded
+                {"original_uploader_id": {"$in": teacher_ids}}  # Originally by teacher
             ]
         }
     
@@ -730,6 +782,12 @@ async def get_user_documents(
         
         # Add chunks_count for frontend display
         doc["chunks_count"] = doc.get("total_chunks", 0)
+        
+        # Extract title and subject from metadata for frontend
+        metadata = doc.get("metadata", {})
+        doc["title"] = metadata.get("title", doc.get("filename", "Untitled"))
+        doc["subject"] = metadata.get("subject", "General")
+        doc["grade_level"] = metadata.get("grade_level", "N/A")
         
         result_docs.append(doc)
     
@@ -863,12 +921,22 @@ async def get_global_prompts(
     except Exception:
         pass
     
-    # Get user's documents
+    # Get user's role
+    user = await db.users.find_one({"user_id": user_id})
+    role = user.get("role", "student") if user else "student"
+    
+    # Get teacher IDs for student access
+    teachers = await db.users.find({"role": "teacher"}, {"user_id": 1}).to_list(length=None)
+    teacher_ids = [t["user_id"] for t in teachers]
+    
+    # Get user's documents (including teacher documents for students)
     cursor = db.content.find(
         {
             "$or": [
-                {"user_id": user_id},
-                {"upload_history.user_id": user_id}
+                {"user_id": user_id},  # Student owns
+                {"upload_history.user_id": user_id},  # Student uploaded
+                {"user_id": {"$in": teacher_ids}},  # Teacher uploaded
+                {"original_uploader_id": {"$in": teacher_ids}}  # Originally by teacher
             ],
             "status": "completed"
         }
@@ -876,12 +944,15 @@ async def get_global_prompts(
     documents = await cursor.to_list(length=None)
     
     if not documents:
-        # Return generic prompts
+        # Return helpful message for empty state
         return {
             "prompts": [
-                {"id": "g1", "text": "Tell me about the documents I've uploaded", "category": "explanation"},
-                {"id": "g2", "text": "Help me create a study plan", "category": "evaluation"},
-                {"id": "g3", "text": "What topics should I review?", "category": "evaluation"}
+                {
+                    "id": "g1", 
+                    "text": "Upload your first document or ask your teacher to share materials", 
+                    "category": "information",
+                    "icon": "upload"
+                }
             ]
         }
     

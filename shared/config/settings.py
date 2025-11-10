@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     
     # Cache Configuration
     cache_ttl_seconds: int = Field(default=3600, env="CACHE_TTL_SECONDS")
+    cache_frequency_threshold: int = Field(default=5, env="CACHE_FREQUENCY_THRESHOLD")
     
     # Service URLs (for API Gateway)
     auth_service_url: Optional[str] = Field(default=None, env="AUTH_SERVICE_URL")

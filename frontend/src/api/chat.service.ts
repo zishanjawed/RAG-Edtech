@@ -3,7 +3,7 @@
  * API calls for chat/query functionality
  */
 import { apiClient } from './client'
-import type { AskQuestionRequest, Message, StreamChunk, QuestionResponse, GlobalChatRequest, GlobalChatResponse } from './types'
+import type { AskQuestionRequest, Message, StreamChunk, QuestionResponse, GlobalChatRequest, GlobalChatResponse, PopularQuestion } from './types'
 
 export const chatService = {
   /**
@@ -178,6 +178,24 @@ export const chatService = {
       })
 
     return () => abortController.abort()
+  },
+
+  /**
+   * Get popular questions for a document
+   */
+  async getPopularQuestions(
+    contentId: string,
+    limit: number = 10
+  ): Promise<PopularQuestion[]> {
+    try {
+      const response = await apiClient.get<{ popular_questions: PopularQuestion[]; total: number }>(
+        `/api/query/${contentId}/popular?limit=${limit}`
+      )
+      return response.data.popular_questions || []
+    } catch (error) {
+      console.error('Failed to fetch popular questions:', error)
+      return []
+    }
   },
 }
 

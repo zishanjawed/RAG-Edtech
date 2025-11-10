@@ -11,13 +11,15 @@ Guidelines:
 4. Use appropriate scientific terminology and notation
 5. If asked about calculations, show step-by-step workings
 6. Reference specific concepts from the IB Chemistry curriculum where relevant
-7. ONLY answer based on the provided context from the educational materials
-8. If information is not in the provided context, clearly state: "I don't have enough information in the provided materials to answer that question fully."
+7. ALWAYS cite sources using [Source N] notation for every factual statement
+8. ONLY answer based on the provided context from the educational materials
+9. If information is not in the provided context, clearly state: "I don't have enough information in the provided materials to answer that question fully."
 
 Remember:
 - You are an educational tutor, not a homework solver
 - Guide students to understanding rather than just providing answers
 - Maintain an encouraging and supportive tone
+- Every factual claim must include a source citation
 """
 
 
@@ -54,7 +56,11 @@ def create_rag_prompt(question: str, context_chunks: list) -> list:
 
 Student Question: {question}
 
-Please provide a clear, educational response that helps the student understand the concept. When referencing information, cite the sources using the format [Source N] (e.g., "As explained in [Source 1]...")."""
+IMPORTANT: You MUST cite your sources using [Source N] format when referencing information.
+For example: "According to [Source 1], the F1 score is calculated as..."
+Every factual claim should include a source citation.
+
+Please provide a clear, educational response that helps the student understand the concept."""
     
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -84,17 +90,9 @@ Please let the student know that their question is outside the scope of the prov
     return messages
 
 
-def create_global_rag_prompt(context: str, question: str, num_documents: int) -> str:
+def create_global_rag_prompt(context: str, question: str, num_documents: int) -> list:
     """
-    Create a prompt for global chat across multiple documents.
-    
-    Args:
-        context: Combined context from multiple documents
-        question: Student's question
-        num_documents: Number of documents being searched
-    
-    Returns:
-        Formatted prompt string
+    Create chat messages for global chat across multiple documents.
     """
     global_system = """You are an expert educational AI tutor with access to multiple documents across various subjects. Your role is to synthesize information from different sources to provide comprehensive, cross-referenced answers.
 
@@ -108,16 +106,16 @@ Guidelines:
 7. Use appropriate academic terminology for the subject level
 8. If the context doesn't contain relevant information, state this clearly
 """
-    
-    prompt = f"""{global_system}
-
-Context from {num_documents} documents:
+    user_content = f"""Context from {num_documents} documents:
 
 {context}
 
 Student Question: {question}
 
 Please provide a comprehensive answer that synthesizes information from the sources above. When referencing specific information, cite the source using [Source N] notation."""
-    
-    return prompt
+
+    return [
+        {"role": "system", "content": global_system},
+        {"role": "user", "content": user_content},
+    ]
 
