@@ -70,12 +70,10 @@ export const chatService = {
       })
       .catch((error) => {
         if (error.name !== 'AbortError') {
-          console.error('Streaming error:', error)
           onError(error)
         }
       })
 
-    // Return cleanup function
     return () => abortController.abort()
   },
 
@@ -175,7 +173,6 @@ export const chatService = {
       })
       .catch((error) => {
         if (error.name !== 'AbortError') {
-          console.error('Streaming error:', error)
           onError(error)
         }
       })

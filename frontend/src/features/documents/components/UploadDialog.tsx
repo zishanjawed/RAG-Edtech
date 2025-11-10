@@ -110,7 +110,6 @@ export function UploadDialog({ open, onOpenChange, onUploadComplete }: UploadDia
         }, 2000)
       }
     } catch (error) {
-      console.error('Upload failed:', error)
       setProcessingStatus('Upload failed. Please try again.')
     } finally {
       setIsUploading(false)
@@ -122,8 +121,6 @@ export function UploadDialog({ open, onOpenChange, onUploadComplete }: UploadDia
     const ws = new WebSocket(`${wsBaseUrl}/ws/document/${contentId}/status`)
 
     ws.onopen = () => {
-      console.log('WebSocket connected for', contentId)
-      // Send heartbeat every 25 seconds
       const heartbeat = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ping' }))
@@ -135,7 +132,6 @@ export function UploadDialog({ open, onOpenChange, onUploadComplete }: UploadDia
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data)
-      console.log('WebSocket status:', data)
 
       if (data.type === 'heartbeat' || data.type === 'pong') {
         return
@@ -158,13 +154,12 @@ export function UploadDialog({ open, onOpenChange, onUploadComplete }: UploadDia
       }
     }
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error)
+    ws.onerror = () => {
       setProcessingStatus('Connection error - status unknown')
     }
 
     ws.onclose = () => {
-      console.log('WebSocket closed')
+      // WebSocket closed
     }
   }
 

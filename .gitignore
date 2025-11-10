@@ -77,3 +77,6 @@ htmlcov/
 # Plan file (already exists)
 /rag-e.plan.md
 
+/temp
+
+.cursor

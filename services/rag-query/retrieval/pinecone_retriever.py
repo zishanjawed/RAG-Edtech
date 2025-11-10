@@ -116,8 +116,7 @@ class PineconeRetriever:
         try:
             logger.info(f"Global search across {len(content_ids)} documents, top_k={top_k}")
             
-            # For global search, query across multiple namespaces
-            # We'll query each namespace separately and merge results
+            # Query each namespace separately and merge results
             all_results = []
             
             for content_id in content_ids:

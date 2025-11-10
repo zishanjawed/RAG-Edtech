@@ -358,7 +358,43 @@ async def global_chat_complete(
     # Diversify results (max 2 chunks per document, 8 total)
     diverse_results = diversify_search_results(results, max_per_doc=2, max_total=8)
     
-    logger.info(f"Retrieved {len(diverse_results)} diverse chunks from {len(set(r.metadata.get('content_id') for r in diverse_results))} documents")
+    logger.info(f"Retrieved {len(diverse_results)} diverse chunks from {len(set(r.metadata.get('content_id') for r in diverse_results)) if diverse_results else 0} documents")
+    
+    # If no results found, return helpful message
+    if not diverse_results or len(diverse_results) == 0:
+        no_vectors_message = f"""I couldn't find any searchable content in your {len(doc_ids)} document(s).
+
+**To enable global chat:**
+1. Upload documents through the "Upload New" button
+2. Wait for each to finish processing (you'll see "Ready" status)
+3. Documents with vectors are searchable
+4. Then global chat will work across all your documents!
+
+**Currently:** Your documents exist in the database but haven't been vectorized yet. Upload them through the UI to create searchable vectors."""
+        
+        total_time = int((time.time() - start_time) * 1000)
+        
+        return QuestionResponse(
+            question_id=question_id,
+            content_id="global",
+            question=request_data.question,
+            answer=no_vectors_message,
+            sources=[],
+            metadata={
+                "chunks_used": 0,
+                "documents_searched": len(doc_ids),
+                "response_time_ms": total_time,
+                "llm_time_ms": 0,
+                "retrieval_time_ms": retrieval_time,
+                "tokens_used": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0
+                },
+                "model": "gpt-4-0613"
+            },
+            cached=False
+        )
     
     # Build context from diverse results
     context = "\n\n---\n\n".join([

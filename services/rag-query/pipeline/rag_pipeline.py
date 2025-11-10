@@ -2,6 +2,7 @@
 Complete RAG pipeline for question answering.
 """
 import time
+import asyncio
 from typing import AsyncIterator, Dict, Any
 from retrieval.pinecone_retriever import PineconeRetriever
 from llm.openai_client import OpenAIClient
@@ -193,6 +194,21 @@ class RAGPipeline:
                         extra={"content_id": content_id, "question_length": len(sanitized_question)}
                     )
                     retrieval_obs.set_output({"chunks_retrieved": 0, "warning": "No chunks found"})
+            
+            # If no chunks, yield helpful message instead of trying to generate
+            if not chunks or len(chunks) == 0:
+                no_vectors_message = """I don't have searchable content for this document yet.
+
+To enable chat: Upload this document through the "Upload New" button, wait for processing (1-2 min), then chat will work!
+
+Why: Documents need to be vectorized before I can search and answer questions."""
+                
+                # Yield the message word by word for streaming effect
+                words = no_vectors_message.split()
+                for word in words:
+                    yield word + " "
+                    await asyncio.sleep(0.05)  # Small delay for streaming effect
+                return
             
             # 5. Create prompt with context
             messages = create_rag_prompt(sanitized_question, chunks)
@@ -430,6 +446,39 @@ class RAGPipeline:
                         "avg_similarity": round(avg_score, 3),
                         "chunk_ids": chunk_ids
                     })
+                else:
+                    # No chunks found - document not vectorized
+                    logger.warning(f"No vectors found for content {content_id}")
+                    retrieval_obs.set_output({"chunks_retrieved": 0, "warning": "No vectors in Pinecone"})
+            
+            # If no chunks, return helpful message instead of trying to generate
+            if not chunks or len(chunks) == 0:
+                no_vectors_response = """I don't have searchable content for this document yet.
+
+**To enable chat with this document:**
+1. This document needs to be uploaded through the "Upload New" button
+2. The system will process and vectorize it (takes 1-2 minutes)
+3. You'll see a "Ready" status badge when complete
+4. Then you can ask questions and I'll provide answers with sources!
+
+**Why this happens:** Documents need to be converted into searchable vectors before I can find relevant information. Directly added database entries don't have these vectors yet."""
+                
+                response_time = time.time() - start_time
+                return {
+                    "response": no_vectors_response,
+                    "cached": False,
+                    "metadata": {
+                        "chunks_used": 0,
+                        "response_time_ms": int(response_time * 1000),
+                        "llm_time_ms": 0,
+                        "tokens_used": {
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "total_tokens": 0
+                        }
+                    },
+                    "sources": []
+                }
             
             # Create prompt
             messages = create_rag_prompt(sanitized_question, chunks)

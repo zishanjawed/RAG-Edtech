@@ -42,7 +42,6 @@ export function ChatPage() {
           setIsLoadingDoc(false)
         })
         .catch((err) => {
-          console.error('Failed to load document:', err)
           setIsLoadingDoc(false)
         })
     }
@@ -97,7 +96,6 @@ export function ChatPage() {
           description: `Generated with ${response.sources.length} sources`,
         })
       } catch (error) {
-        console.error('Error asking question:', error)
         toast({
           type: 'error',
           title: 'Error',

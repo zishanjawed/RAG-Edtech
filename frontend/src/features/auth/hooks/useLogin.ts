@@ -19,8 +19,6 @@ export function useLogin() {
     onSuccess: () => {
       success('Login successful', 'Welcome back!')
       
-      // Redirect based on user role
-      // Note: user state should be updated by login() before onSuccess is called
       const currentUser = useAuthStore.getState().user
       if (currentUser?.role === 'teacher') {
         navigate('/teacher/dashboard')

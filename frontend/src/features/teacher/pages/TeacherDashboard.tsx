@@ -114,8 +114,8 @@ export function TeacherDashboard() {
     )
   }
 
-  const chartData = overview.top_contents.slice(0, 5).map((content) => ({
-    name: `Content ${content.content_id.slice(0, 8)}`,
+  const chartData = (overview.top_contents || []).slice(0, 5).map((content) => ({
+    name: content.content_title || `Content ${(content.content_id || '').slice(0, 8)}`,
     questions: content.question_count,
     students: content.student_count,
   }))
@@ -185,7 +185,7 @@ export function TeacherDashboard() {
               height={300}
             />
             <div className="mt-6 space-y-2">
-              {overview.top_contents.slice(0, 5).map((c) => (
+              {(overview.top_contents || []).slice(0, 5).map((c) => (
                 <div
                   key={c.content_id}
                   className="flex items-center justify-between rounded-lg border p-3 hover:bg-muted/50 transition-colors"
@@ -196,7 +196,7 @@ export function TeacherDashboard() {
                     </div>
                     <div>
                       <p className="text-sm font-medium">
-                        Content {c.content_id.slice(0, 8)}
+                        {c.content_title || `Content ${(c.content_id || '').slice(0, 8)}`}
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {c.question_count} questions • {c.student_count} students
@@ -237,21 +237,21 @@ export function TeacherDashboard() {
           </CardHeader>
           <CardBody>
             <div className="space-y-2">
-              {overview.recent_students.slice(0, 5).map((student) => (
+              {(overview.recent_students || []).slice(0, 5).map((student) => (
                 <div
-                  key={student._id}
+                  key={student._id || student.student_id || Math.random()}
                   className="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-muted/50 cursor-pointer"
                   onClick={() => navigate('/teacher/students')}
                 >
                   <div className="flex items-center gap-3">
                     <Avatar
-                      name={getInitials(student._id)}
+                      name={student.student_name || getInitials(student._id || student.student_id || 'U')}
                       size="md"
                       className="bg-primary/10 text-primary"
                     />
                     <div>
                       <p className="font-medium">
-                        Student {student._id.slice(0, 8)}
+                        {student.student_name || `Student ${(student._id || student.student_id || '').slice(0, 8)}`}
                       </p>
                       <p className="text-xs text-muted-foreground">{formatDate(student.last_activity)}</p>
                     </div>

@@ -107,7 +107,7 @@ function addResponseInterceptor(client: AxiosInstance) {
             const authStore = useAuthStore
             authStore.getState().setToken(access_token)
           } catch (storeError) {
-            console.warn('Failed to sync token with auth store:', storeError)
+            // Failed to sync token
           }
 
           // Retry original request with new token
@@ -126,7 +126,7 @@ function addResponseInterceptor(client: AxiosInstance) {
             const authStore = useAuthStore
             authStore.getState().logout()
           } catch (storeError) {
-            console.warn('Failed to logout through auth store:', storeError)
+            // Failed to logout
           }
           
           window.location.href = '/login'

@@ -51,7 +51,7 @@ export function DocumentsPage() {
       )
       setDocuments(docs)
     } catch (error) {
-      console.error('Failed to load documents:', error)
+      // Handle error silently
     } finally {
       setIsLoading(false)
     }
@@ -62,10 +62,9 @@ export function DocumentsPage() {
     
     try {
       await documentsService.deleteDocument(contentId, user.id)
-      // Reload documents after delete
       loadDocuments()
     } catch (error) {
-      console.error('Failed to delete document:', error)
+      // Handle error silently
     }
   }
 

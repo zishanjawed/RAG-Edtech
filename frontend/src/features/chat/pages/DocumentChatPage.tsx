@@ -55,7 +55,7 @@ export function DocumentChatPage() {
       const doc = await documentsService.getDocument(id)
       setDocument(doc)
     } catch (error) {
-      console.error('Failed to load document:', error)
+      // Handle error silently
     }
   }
 
@@ -64,8 +64,6 @@ export function DocumentChatPage() {
       const response = await documentsService.getDocumentPrompts(id)
       setSuggestedPrompts(response.prompts || [])
     } catch (error) {
-      console.error('Failed to load prompts:', error)
-      // Use fallback prompts
       setSuggestedPrompts([
         { id: '1', text: 'Explain the key concepts', category: 'explanation' },
         { id: '2', text: 'What are the main definitions?', category: 'definition' },
@@ -123,7 +121,6 @@ export function DocumentChatPage() {
         }
         setMessages((prev) => [...prev, assistantMessage])
       } catch (error) {
-        console.error('Failed to send message:', error)
         const errorMessage: ChatMessage = {
           id: `msg-${Date.now() + 1}`,
           role: 'assistant',
@@ -178,7 +175,6 @@ export function DocumentChatPage() {
             streamingMessageRef.current = ''
           },
           (error) => {
-            console.error('Streaming error:', error)
             setMessages((prev) =>
               prev.map((msg) =>
                 msg.id === assistantMessageId
@@ -196,7 +192,6 @@ export function DocumentChatPage() {
           }
         )
       } catch (error) {
-        console.error('Failed to start stream:', error)
         setIsStreaming(false)
         streamingMessageRef.current = ''
       }

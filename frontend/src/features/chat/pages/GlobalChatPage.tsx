@@ -45,7 +45,7 @@ export function GlobalChatPage() {
       const docs = await documentsService.getDocuments(user.id, 'all')
       setAvailableDocuments(docs.filter((doc) => doc.status === 'completed'))
     } catch (error) {
-      console.error('Failed to load documents:', error)
+      // Handle error silently
     }
   }
 
@@ -56,8 +56,6 @@ export function GlobalChatPage() {
       const response = await documentsService.getGlobalPrompts(user.id)
       setSuggestedPrompts(response.prompts || [])
     } catch (error) {
-      console.error('Failed to load prompts:', error)
-      // Use fallback prompts
       setSuggestedPrompts([
         { id: '1', text: 'Compare key concepts across my documents', category: 'comparison' },
         { id: '2', text: 'Create a study plan based on my knowledge base', category: 'evaluation' },
@@ -130,7 +128,6 @@ export function GlobalChatPage() {
         )
       )
     } catch (error) {
-      console.error('Failed to send message:', error)
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === assistantMessageId

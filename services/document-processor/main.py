@@ -203,7 +203,6 @@ async def delete_content(
     logger.info(f"Permission granted for deletion (owner: {is_owner}, teacher: {is_teacher}, uploader: {is_uploader})")
     
     # Perform complete deletion
-    # Note: Pinecone client not available in document-processor, deletion handled asynchronously
     deletion_stats = await deletion_service.delete_document_complete(
         content_id=content_id,
         pinecone_client=None  # Will be handled by separate service if needed

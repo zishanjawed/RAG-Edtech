@@ -45,9 +45,6 @@ export function DocumentCard({ document, onDelete, onOpen }: DocumentCardProps) 
   const handleOpenClick = () => {
     if (onOpen) {
       onOpen(document.content_id)
-    } else {
-      // Navigate to document detail view (future feature)
-      console.log('Open document:', document.content_id)
     }
   }
 

@@ -180,7 +180,7 @@ async def get_content_stats(content_id: str, db=Depends(get_mongodb)):
 
 
 # ============================================================================
-# TEACHER DASHBOARD ENDPOINTS (BONUS FEATURE)
+# TEACHER DASHBOARD ENDPOINTS
 # ============================================================================
 
 @app.get("/api/analytics/teacher/overview")
@@ -219,6 +219,17 @@ async def get_teacher_overview(
     
     students = await db.questions.aggregate(students_pipeline).to_list(100)
     
+    # Remove ObjectIds and convert dates
+    for student in students:
+        if "_id" in student:
+            del student["_id"]
+        if "user_info" in student:
+            del student["user_info"]  # Remove array with ObjectIds
+        if "last_activity" in student and hasattr(student["last_activity"], "isoformat"):
+            student["last_activity"] = student["last_activity"].isoformat()
+        if "first_activity" in student and hasattr(student["first_activity"], "isoformat"):
+            student["first_activity"] = student["first_activity"].isoformat()
+    
     # Get overall stats
     total_questions = await db.questions.count_documents({})
     total_students = len(students)
@@ -248,6 +259,13 @@ async def get_teacher_overview(
     ]
     
     top_contents = await db.questions.aggregate(content_pipeline).to_list(10)
+    
+    # Remove ObjectIds from content
+    for content in top_contents:
+        if "_id" in content:
+            del content["_id"]
+        if "content_info" in content:
+            del content["content_info"]  # Remove array with ObjectIds
     
     return {
         "teacher_id": teacher_id,
@@ -307,24 +325,24 @@ async def get_all_students_activity(
                     ]
                 }, 0]
             },
-            "status": {
-                "$cond": {
-                    "if": {
-                        "$gte": [
-                            "$last_activity",
-                            {"$subtract": [new Date(), 7 * 24 * 60 * 60 * 1000]}  # Within last 7 days
-                        ]
-                    },
-                    "then": "active",
-                    "else": "inactive"
-                }
-            }
+            "status": "active"  # Default to active for all students with activity
         }},
         {"$sort": {"last_activity": -1}},
         {"$limit": limit}
     ]
     
     students = await db.questions.aggregate(pipeline).to_list(limit)
+    
+    # Remove ObjectIds and convert dates
+    for student in students:
+        if "_id" in student:
+            del student["_id"]
+        if "user_info" in student:
+            del student["user_info"]  # Remove array with ObjectIds
+        if "last_activity" in student and hasattr(student["last_activity"], "isoformat"):
+            student["last_activity"] = student["last_activity"].isoformat()
+        if "first_activity" in student and hasattr(student["first_activity"], "isoformat"):
+            student["first_activity"] = student["first_activity"].isoformat()
     
     return {
         "teacher_id": teacher_id,
