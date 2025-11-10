@@ -14,8 +14,8 @@ async def get_user_accessible_docs(user_id: str, role: str = None) -> List[str]:
     Get all document IDs accessible to a user.
     
     Access Rules:
-    - Teachers: Can access ALL completed documents in the system
-    - Students: Can access documents they own OR appear in upload_history
+    - Teachers: Can access ALL completed documents + their own processing documents
+    - Students: Can access ALL completed documents uploaded by ANY teacher + their own documents
     
     Args:
         user_id: User ID
@@ -33,33 +33,56 @@ async def get_user_accessible_docs(user_id: str, role: str = None) -> List[str]:
     
     logger.info(f"Getting accessible documents for user {user_id} (role: {role})")
     
-    # Teachers can access ALL completed documents
+    # Teachers can access ALL completed documents + their own processing documents
     if role == "teacher":
         cursor = db.content.find(
-            {"status": "completed"},
+            {
+                "$or": [
+                    {"status": "completed"},  # All completed documents
+                    {"user_id": user_id, "status": {"$in": ["processing", "pending"]}}  # Own processing docs
+                ]
+            },
             {"content_id": 1}
         )
         docs = await cursor.to_list(length=None)
         doc_ids = [doc["content_id"] for doc in docs]
-        logger.info(f"Teacher access: {len(doc_ids)} documents")
+        logger.info(f"Teacher access: {len(doc_ids)} documents (completed + own processing)")
         return doc_ids
     
-    # Students can access: owned OR in upload_history OR explicitly shared
+    # Students can access: ALL documents uploaded by ANY teacher + their own documents
+    # Get all teacher user IDs
+    teachers = await db.users.find({"role": "teacher"}, {"user_id": 1}).to_list(length=None)
+    teacher_ids = [t["user_id"] for t in teachers] if teachers else []
+    
+    # Students get ALL completed documents uploaded by teachers + their own documents (any status)
     cursor = db.content.find(
         {
             "$or": [
-                {"user_id": user_id},
-                {"upload_history.user_id": user_id},
-                {"shared_with.user_id": user_id}  # Future feature
-            ],
-            "status": "completed"
+                {"user_id": user_id},  # Owned by student (any status)
+                {"upload_history.user_id": user_id},  # Student uploaded (any status)
+                {"user_id": {"$in": teacher_ids}, "status": "completed"},  # Uploaded by any teacher (completed only)
+                {"original_uploader_id": {"$in": teacher_ids}, "status": "completed"},  # Originally by teacher (completed only)
+                {"shared_with.user_id": user_id}  # Explicitly shared
+            ]
         },
         {"content_id": 1}
     )
     
     docs = await cursor.to_list(length=None)
     doc_ids = [doc["content_id"] for doc in docs]
-    logger.info(f"Student access: {len(doc_ids)} documents")
+    logger.info(f"Student access: {len(doc_ids)} documents (all teacher docs + own docs, {len(teacher_ids)} teacher(s))")
+    
+    # Add debug logging when no documents found
+    if len(doc_ids) == 0:
+        logger.warning(f"[DEBUG] No documents found for student {user_id}. Checking all statuses...")
+        all_docs = await db.content.find(
+            {"user_id": user_id},
+            {"content_id": 1, "status": 1, "filename": 1, "metadata.title": 1}
+        ).to_list(length=10)
+        logger.warning(f"[DEBUG] Student {user_id} has {len(all_docs)} total documents (any status):")
+        for doc in all_docs:
+            logger.warning(f"  - {doc.get('metadata', {}).get('title', doc.get('filename', 'Unknown'))}: status={doc.get('status', 'unknown')}")
+    
     return doc_ids
 
 
@@ -99,4 +122,35 @@ async def filter_accessible_docs(user_id: str, doc_ids: List[str], role: str = N
     
     logger.info(f"Filtered {len(doc_ids)} to {len(filtered)} accessible documents for user {user_id}")
     return filtered
+
+
+async def get_completed_docs_for_search(doc_ids: List[str]) -> List[str]:
+    """
+    Filter document IDs to only include completed documents (ready for search).
+    
+    Args:
+        doc_ids: List of document IDs to filter
+    
+    Returns:
+        List of completed document IDs ready for vector search
+    """
+    if not doc_ids:
+        return []
+    
+    db = mongodb_client.get_database()
+    completed_docs = await db.content.find(
+        {
+            "content_id": {"$in": doc_ids},
+            "status": "completed"
+        },
+        {"content_id": 1}
+    ).to_list(length=None)
+    
+    completed_ids = [doc["content_id"] for doc in completed_docs]
+    
+    if len(completed_ids) < len(doc_ids):
+        processing_count = len(doc_ids) - len(completed_ids)
+        logger.info(f"Filtered {len(doc_ids)} docs to {len(completed_ids)} completed (excluding {processing_count} processing)")
+    
+    return completed_ids
 

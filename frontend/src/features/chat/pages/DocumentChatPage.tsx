@@ -3,11 +3,13 @@
  * Document-specific chat with suggested prompts and sources
  */
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ChatMessage, SuggestedPrompt, Document } from '../../../api/types'
+import { ChatMessage, SuggestedPrompt, Document, PopularQuestion } from '../../../api/types'
 import { SuggestedPrompts } from '../components/SuggestedPrompts'
+import { PopularQuestions } from '../components/PopularQuestions'
 import { SourceCitations } from '../components/SourceCitations'
+import { MarkdownRenderer } from '../../../components/ui/MarkdownRenderer'
 import { Card } from '../../../components/ui/Card'
 import { Badge } from '../../../components/ui/Badge'
 import { Button } from '../../../components/ui/Button'
@@ -21,6 +23,7 @@ import {
   ArrowLeft,
   Sparkles,
   Loader2,
+  Square,
 } from 'lucide-react'
 import { chatService } from '../../../api/chat.service'
 import { documentsService } from '../../../api/documents.service'
@@ -37,16 +40,35 @@ export function DocumentChatPage() {
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [suggestedPrompts, setSuggestedPrompts] = useState<SuggestedPrompt[]>([])
+  const [popularQuestions, setPopularQuestions] = useState<PopularQuestion[]>([])
+  const [loadingPopular, setLoadingPopular] = useState(false)
   const [showSources, setShowSources] = useState(true)
   const [useSourcesMode, setUseSourcesMode] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const streamingMessageRef = useRef<string>('')
+  const abortControllerRef = useRef<(() => void) | null>(null)
+  const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
+  const updateStreamingMessage = useCallback((messageId: string, content: string) => {
+    if (updateTimeoutRef.current) {
+      clearTimeout(updateTimeoutRef.current)
+    }
+    
+    updateTimeoutRef.current = setTimeout(() => {
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === messageId ? { ...msg, content } : msg
+        )
+      )
+    }, 50)
+  }, [])
 
   // Load document and prompts
   useEffect(() => {
     if (documentId) {
       loadDocument(documentId)
       loadDocumentPrompts(documentId)
+      loadPopularQuestions(documentId)
     }
   }, [documentId])
 
@@ -69,6 +91,18 @@ export function DocumentChatPage() {
         { id: '2', text: 'What are the main definitions?', category: 'definition' },
         { id: '3', text: 'Give me practice problems', category: 'application' },
       ])
+    }
+  }
+
+  const loadPopularQuestions = async (id: string) => {
+    try {
+      setLoadingPopular(true)
+      const questions = await chatService.getPopularQuestions(id, 10)
+      setPopularQuestions(questions)
+    } catch (error) {
+      setPopularQuestions([])
+    } finally {
+      setLoadingPopular(false)
     }
   }
 
@@ -113,10 +147,12 @@ export function DocumentChatPage() {
           content: response.answer,
           timestamp: new Date().toISOString(),
           sources: response.sources,
+          cached: response.cached,
           metadata: {
             response_time_ms: response.metadata.response_time_ms,
             tokens_used: response.metadata.tokens_used?.total_tokens,
             model: response.metadata.model,
+            question_frequency: response.metadata.question_frequency,
           },
         }
         setMessages((prev) => [...prev, assistantMessage])
@@ -148,31 +184,24 @@ export function DocumentChatPage() {
       setMessages((prev) => [...prev, assistantMessage])
 
       try {
-        // Use existing streaming service
-        chatService.askQuestionStream(
+        const abort = chatService.askQuestionStream(
           documentId,
           { question, user_id: user.id },
           (chunk) => {
             if (chunk.content) {
               streamingMessageRef.current += chunk.content
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === assistantMessageId
-                    ? { ...msg, content: streamingMessageRef.current }
-                    : msg
-                )
-              )
+              updateStreamingMessage(assistantMessageId, streamingMessageRef.current)
             }
           },
           () => {
-            // Stream complete
             setMessages((prev) =>
               prev.map((msg) =>
-                msg.id === assistantMessageId ? { ...msg, streaming: false } : msg
+                msg.id === assistantMessageId ? { ...msg, streaming: false, content: streamingMessageRef.current } : msg
               )
             )
             setIsStreaming(false)
             streamingMessageRef.current = ''
+            abortControllerRef.current = null
           },
           (error) => {
             setMessages((prev) =>
@@ -189,11 +218,15 @@ export function DocumentChatPage() {
             )
             setIsStreaming(false)
             streamingMessageRef.current = ''
+            abortControllerRef.current = null
           }
         )
+        
+        abortControllerRef.current = abort
       } catch (error) {
         setIsStreaming(false)
         streamingMessageRef.current = ''
+        abortControllerRef.current = null
       }
     }
   }
@@ -310,11 +343,22 @@ export function DocumentChatPage() {
                   </p>
                 </motion.div>
 
-                <SuggestedPrompts
-                  prompts={suggestedPrompts}
-                  onPromptClick={handlePromptClick}
-                  className="w-full max-w-2xl"
-                />
+                <div className="w-full max-w-2xl space-y-4">
+                  {/* Popular Questions Panel */}
+                  {(popularQuestions.length > 0 || loadingPopular) && (
+                    <PopularQuestions
+                      questions={popularQuestions}
+                      onQuestionClick={handlePromptClick}
+                      isLoading={loadingPopular}
+                    />
+                  )}
+                  
+                  {/* Suggested Prompts */}
+                  <SuggestedPrompts
+                    prompts={suggestedPrompts}
+                    onPromptClick={handlePromptClick}
+                  />
+                </div>
               </div>
             ) : (
               /* Messages */
@@ -334,70 +378,99 @@ export function DocumentChatPage() {
                           message.role === 'user' ? 'justify-end' : 'justify-start'
                         )}
                       >
-                        {message.role === 'assistant' && (
-                          <div className="flex-shrink-0">
-                            <div className="p-2 rounded-full bg-primary/10">
-                              <Bot className="h-5 w-5 text-primary" />
+                        {message.role === 'assistant' && message.streaming && !message.content ? (
+                          <>
+                            <div className="flex-shrink-0">
+                              <div className="p-2 rounded-full bg-primary/10">
+                                <Bot className="h-5 w-5 text-primary" />
+                              </div>
                             </div>
-                          </div>
-                        )}
-
-                        <div
-                          className={cn(
-                            'flex-1 max-w-3xl',
-                            message.role === 'user' && 'max-w-2xl'
-                          )}
-                        >
-                          <Card
-                            className={cn(
-                              'overflow-hidden',
-                              message.role === 'user'
-                                ? 'bg-primary text-primary-foreground'
-                                : 'bg-card',
-                              message.error && 'border-red-500'
+                            <div className="flex-1 max-w-3xl">
+                              <Card className="bg-card">
+                                <div className="p-4 space-y-3">
+                                  <div className="h-3 bg-muted rounded animate-pulse w-full" />
+                                  <div className="h-3 bg-muted rounded animate-pulse w-5/6" />
+                                  <div className="h-3 bg-muted rounded animate-pulse w-4/6" />
+                                </div>
+                              </Card>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {message.role === 'assistant' && (
+                              <div className="flex-shrink-0">
+                                <div className="p-2 rounded-full bg-primary/10">
+                                  <Bot className="h-5 w-5 text-primary" />
+                                </div>
+                              </div>
                             )}
-                          >
-                            <div className="p-4">
-                              <div
+
+                            <div
+                              className={cn(
+                                'flex-1 max-w-3xl',
+                                message.role === 'user' && 'max-w-2xl'
+                              )}
+                            >
+                              <Card
                                 className={cn(
-                                  'prose prose-sm max-w-none',
-                                  message.role === 'user' && 'prose-invert'
+                                  'overflow-hidden',
+                                  message.role === 'user'
+                                    ? 'bg-primary text-primary-foreground'
+                                    : 'bg-card',
+                                  message.error && 'border-red-500'
                                 )}
                               >
-                                {message.content}
-                                {message.streaming && (
-                                  <span className="inline-block w-2 h-4 ml-1 bg-current animate-pulse" />
-                                )}
-                              </div>
+                                <div className="p-4">
+                                  <div
+                                    className={cn(
+                                      'prose prose-sm max-w-none',
+                                      message.role === 'user' && 'prose-invert'
+                                    )}
+                                  >
+                                    {message.role === 'user' ? (
+                                      message.content
+                                    ) : (
+                                      <MarkdownRenderer content={message.content} />
+                                    )}
+                                    {message.streaming && message.content && (
+                                      <span className="inline-flex items-center gap-1 ml-2">
+                                        <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                                        <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                                        <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                                      </span>
+                                    )}
+                                  </div>
 
-                              {message.metadata && (
-                                <div className="mt-3 pt-3 border-t flex items-center gap-4 text-xs text-muted-foreground">
-                                  <span>{message.metadata.response_time_ms}ms</span>
-                                  <span>{message.metadata.tokens_used} tokens</span>
-                                  <span>{message.metadata.model}</span>
+                                  {message.metadata && (
+                                    <div className="mt-3 pt-3 border-t flex items-center gap-4 text-xs text-muted-foreground">
+                                      <span>{message.metadata.response_time_ms}ms</span>
+                                      <span>{message.metadata.tokens_used} tokens</span>
+                                      <span>{message.metadata.model}</span>
+                                    </div>
+                                  )}
                                 </div>
-                              )}
-                            </div>
-                          </Card>
+                              </Card>
 
-                          {/* Sources */}
-                          {message.role === 'assistant' &&
-                            !message.streaming &&
-                            message.sources &&
-                            message.sources.length > 0 &&
-                            showSources && (
-                              <div className="mt-4">
-                                <SourceCitations sources={message.sources} />
+                              {/* Sources */}
+                              {message.role === 'assistant' &&
+                                !message.streaming &&
+                                message.sources &&
+                                message.sources.length > 0 &&
+                                showSources && (
+                                  <div className="mt-4">
+                                    <SourceCitations sources={message.sources} />
+                                  </div>
+                                )}
+                            </div>
+
+                            {message.role === 'user' && (
+                              <div className="flex-shrink-0">
+                                <div className="p-2 rounded-full bg-primary">
+                                  <UserIcon className="h-5 w-5 text-primary-foreground" />
+                                </div>
                               </div>
                             )}
-                        </div>
-
-                        {message.role === 'user' && (
-                          <div className="flex-shrink-0">
-                            <div className="p-2 rounded-full bg-primary">
-                              <UserIcon className="h-5 w-5 text-primary-foreground" />
-                            </div>
-                          </div>
+                          </>
                         )}
                       </div>
                     </motion.div>
@@ -423,6 +496,17 @@ export function DocumentChatPage() {
               disabled={isStreaming || document.status !== 'completed'}
               className="flex-1"
             />
+            {isStreaming && !useSourcesMode && (
+              <Button
+                variant="ghost"
+                size="lg"
+                onClick={() => abortControllerRef.current?.()}
+                className="px-4"
+              >
+                <Square className="h-4 w-4 mr-2" />
+                Stop
+              </Button>
+            )}
             <Button
               onClick={handleSend}
               disabled={!input.trim() || isStreaming || document.status !== 'completed'}

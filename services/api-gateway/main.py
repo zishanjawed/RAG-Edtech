@@ -450,6 +450,23 @@ async def get_user_documents(
         return response.json()
 
 
+@app.get("/api/content/{content_id}")
+async def get_document(
+    content_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Get a single document by ID."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{settings.document_processor_url}/api/content/{content_id}"
+        )
+        
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+        
+        return response.json()
+
+
 @app.get("/api/prompts/document/{content_id}")
 async def get_document_prompts(
     content_id: str,
@@ -484,27 +501,24 @@ async def get_global_prompts(
         return response.json()
 
 
-@app.post("/api/content/{content_id}/question")
-async def document_chat_stream(
-    content_id: str,
+@app.post("/api/query/global/complete")
+async def global_chat_complete(
     request: Request,
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """Document chat with streaming response."""
+    """Global chat across multiple documents."""
     body = await request.json()
     
-    # Forward streaming response
-    async def stream_response():
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            async with client.stream(
-                "POST",
-                f"{settings.rag_query_url}/api/content/{content_id}/question",
-                json=body
-            ) as response:
-                async for chunk in response.aiter_bytes():
-                    yield chunk
-    
-    return StreamingResponse(stream_response(), media_type="text/plain")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{settings.rag_query_service_url}/api/query/global/complete",
+            json=body
+        )
+        
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+        
+        return response.json()
 
 
 @app.post("/api/query/{content_id}/complete")
@@ -519,26 +533,6 @@ async def document_chat_complete(
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             f"{settings.rag_query_service_url}/api/query/{content_id}/complete",
-            json=body
-        )
-        
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-        
-        return response.json()
-
-
-@app.post("/api/query/global/complete")
-async def global_chat_complete(
-    request: Request,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    """Global chat across multiple documents."""
-    body = await request.json()
-    
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            f"{settings.rag_query_service_url}/api/query/global/complete",
             json=body
         )
         
@@ -574,6 +568,23 @@ async def get_teacher_overview(
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{settings.analytics_service_url}/api/analytics/teacher/overview?teacher_id={teacher_id}"
+        )
+        
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+        
+        return response.json()
+
+
+@app.get("/api/content/{content_id}/stats")
+async def get_content_stats(
+    content_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Get statistics for a content."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{settings.analytics_service_url}/api/content/{content_id}/stats"
         )
         
         if response.status_code != 200:

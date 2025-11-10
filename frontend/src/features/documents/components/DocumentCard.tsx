@@ -28,6 +28,7 @@ import {
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../../components/ui/tooltip'
+import { parseApiDate } from '../../../utils/formatters'
 
 interface DocumentCardProps {
   document: Document
@@ -89,7 +90,9 @@ export function DocumentCard({ document, onDelete, onOpen }: DocumentCardProps) 
   const getLastActivityText = () => {
     if (!document.last_activity) return null
     try {
-      return formatDistanceToNow(new Date(document.last_activity), { addSuffix: true })
+      const parsed = parseApiDate(document.last_activity)
+      if (isNaN(parsed.getTime())) return null
+      return formatDistanceToNow(parsed, { addSuffix: true })
     } catch {
       return null
     }

@@ -51,11 +51,11 @@ export function UploadDialog({ open, onOpenChange, onUploadComplete }: UploadDia
   }
 
   const handleUpload = async () => {
-    if (files.length === 0) return
+    if (files.length === 0 || !user) return
 
     setIsUploading(true)
     setUploadSuccess(false)
-    setProcessingStatus('Uploading...')
+    setProcessingStatus('Uploading file...')
     setProcessingProgress(0)
 
     try {
@@ -84,11 +84,15 @@ export function UploadDialog({ open, onOpenChange, onUploadComplete }: UploadDia
       })
 
       if (!response.ok) {
-        throw new Error('Upload failed')
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.detail || errorData.message || 'Upload failed')
       }
 
       const document = await response.json()
       setUploadedDoc(document)
+
+      setProcessingStatus('Upload complete - processing document...')
+      setProcessingProgress(10)
 
       // Connect to WebSocket for real-time status
       if (!document.is_duplicate) {
@@ -97,20 +101,22 @@ export function UploadDialog({ open, onOpenChange, onUploadComplete }: UploadDia
         setUploadSuccess(true)
         setProcessingStatus('Duplicate detected - linked to your account')
         setProcessingProgress(100)
-      }
+        
+        if (onUploadComplete) {
+          onUploadComplete(document)
+        }
 
-      if (onUploadComplete) {
-        onUploadComplete(document)
-      }
-
-      // Reset form after status complete
-      if (document.is_duplicate) {
+        // Reset form after status complete
         setTimeout(() => {
           handleClose()
         }, 2000)
       }
-    } catch (error) {
-      setProcessingStatus('Upload failed. Please try again.')
+    } catch (error: any) {
+      console.error('Upload error:', error)
+      const errorMessage = error.message || 'Unknown error occurred'
+      setProcessingStatus(`Upload failed: ${errorMessage}`)
+      setUploadSuccess(false)
+      setProcessingProgress(0)
     } finally {
       setIsUploading(false)
     }
@@ -119,13 +125,17 @@ export function UploadDialog({ open, onOpenChange, onUploadComplete }: UploadDia
   const connectWebSocket = (contentId: string) => {
     const wsBaseUrl = import.meta.env.VITE_WS_BASE_URL || 'ws://localhost:8000'
     const ws = new WebSocket(`${wsBaseUrl}/ws/document/${contentId}/status`)
+    let wsConnected = false
+    let pollInterval: NodeJS.Timeout | null = null
+    let heartbeatInterval: NodeJS.Timeout | null = null
 
     ws.onopen = () => {
-      const heartbeat = setInterval(() => {
+      wsConnected = true
+      heartbeatInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'ping' }))
         } else {
-          clearInterval(heartbeat)
+          if (heartbeatInterval) clearInterval(heartbeatInterval)
         }
       }, 25000)
     }
@@ -143,23 +153,96 @@ export function UploadDialog({ open, onOpenChange, onUploadComplete }: UploadDia
       if (data.status === 'completed') {
         setUploadSuccess(true)
         ws.close()
+        if (heartbeatInterval) clearInterval(heartbeatInterval)
+        if (pollInterval) clearInterval(pollInterval)
         
-        // Close dialog after 2 seconds
+        // Notify parent with updated document
+        if (uploadedDoc && onUploadComplete) {
+          const completedDoc = { ...uploadedDoc, status: 'completed' as const }
+          onUploadComplete(completedDoc)
+        }
+        
+        // Close dialog after showing success
         setTimeout(() => {
           handleClose()
         }, 2000)
       } else if (data.status === 'failed') {
         setProcessingStatus('Processing failed')
         ws.close()
+        if (heartbeatInterval) clearInterval(heartbeatInterval)
+        if (pollInterval) clearInterval(pollInterval)
       }
     }
 
-    ws.onerror = () => {
-      setProcessingStatus('Connection error - status unknown')
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error)
+      setProcessingStatus('Connection issue - checking status...')
+      
+      // Fallback to polling after WebSocket error
+      if (!pollInterval) {
+        startPolling(contentId)
+      }
     }
 
     ws.onclose = () => {
-      // WebSocket closed
+      if (heartbeatInterval) clearInterval(heartbeatInterval)
+      
+      // If closed unexpectedly and not yet completed, start polling
+      if (wsConnected && !uploadSuccess) {
+        console.log('WebSocket closed unexpectedly, starting polling')
+        if (!pollInterval) {
+          startPolling(contentId)
+        }
+      }
+    }
+
+    // Polling fallback function
+    const startPolling = (contentId: string) => {
+      let attempts = 0
+      const maxAttempts = 150 // 5 minutes (150 * 2s)
+      
+      pollInterval = setInterval(async () => {
+        attempts++
+        
+        if (attempts > maxAttempts) {
+          if (pollInterval) clearInterval(pollInterval)
+          setProcessingStatus('Processing timeout - please refresh')
+          return
+        }
+        
+        try {
+          const doc = await documentsService.getDocument(contentId)
+          
+          if (doc.status === 'completed') {
+            setUploadSuccess(true)
+            setProcessingStatus('Document ready for chat!')
+            setProcessingProgress(100)
+            if (pollInterval) clearInterval(pollInterval)
+            
+            if (uploadedDoc && onUploadComplete) {
+              const completedDoc = { ...uploadedDoc, status: 'completed' as const }
+              onUploadComplete(completedDoc)
+            }
+            
+            setTimeout(() => {
+              handleClose()
+            }, 2000)
+          } else if (doc.status === 'failed') {
+            setProcessingStatus('Processing failed')
+            if (pollInterval) clearInterval(pollInterval)
+          } else {
+            // Calculate progress
+            const progress = doc.total_chunks && doc.total_chunks > 0 
+              ? Math.floor(((doc.processed_chunks || 0) / doc.total_chunks) * 100)
+              : 0
+            setProcessingProgress(progress)
+            setProcessingStatus(`Processing... ${doc.processed_chunks || 0}/${doc.total_chunks || 0} chunks`)
+          }
+        } catch (error) {
+          console.error('Failed to poll status:', error)
+          // Continue polling despite errors
+        }
+      }, 2000) // Poll every 2 seconds
     }
   }
 

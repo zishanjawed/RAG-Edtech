@@ -127,10 +127,14 @@ class PineconeRetriever:
                         namespace=content_id,
                         include_metadata=True
                     )
-                    
-                    for match in namespace_results.get('matches', []):
+                    # Pinecone v3 may return a dict-like object; support both dict and object forms
+                    matches = (
+                        namespace_results['matches']
+                        if isinstance(namespace_results, dict) or hasattr(namespace_results, '__getitem__')
+                        else getattr(namespace_results, 'matches', [])
+                    )
+                    for match in matches or []:
                         all_results.append(match)
-                
                 except Exception as e:
                     logger.warning(f"Failed to query namespace {content_id}: {e}")
                     continue

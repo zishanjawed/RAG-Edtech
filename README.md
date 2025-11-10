@@ -23,24 +23,39 @@
 - OpenAI API key
 - Pinecone API key
 
-### Setup
+### One-Command Startup
 
 ```bash
 # 1. Clone and configure
 git clone <repository-url>
 cd RAG-Edtech
-cp .env.example .env
-# Edit .env with your API keys (see Environment Variables section below)
 
-# 2. Start backend services
-docker-compose up -d
-sleep 30  # Wait for services to initialize
+# 2. Start everything
+./start.sh
+# The script will guide you through environment setup and start all services
 
-# 3. Create users and seed sample data
+# 3. (Optional) Create test users and sample data
 python scripts/create_users.py
 python scripts/seed_sample_data.py
 
-# 4. Start frontend (in a new terminal)
+# 4. Stop everything
+./stop.sh
+```
+
+### Manual Setup
+
+If you prefer to start services individually:
+
+```bash
+# 1. Configure environment
+cp .env.example .env
+# Edit .env with your API keys
+
+# 2. Start backend services
+docker-compose up -d
+sleep 30
+
+# 3. Start frontend
 cd frontend
 npm install
 echo "VITE_API_BASE_URL=http://localhost:8000" > .env
@@ -49,7 +64,7 @@ npm run dev
 
 ### Access the Platform
 
-- **Frontend:** http://localhost:3000
+- **Frontend:** http://localhost:5173
 - **API Gateway:** http://localhost:8000
 - **API Documentation:** http://localhost:8000/docs
 - **RabbitMQ Management:** http://localhost:15672 (admin/password123)
@@ -512,10 +527,23 @@ RAG-Edtech/
 
 ## Quick Commands
 
-### Backend
+### Starting and Stopping
 
 ```bash
-# Start all services
+# Start everything (frontend + backend)
+./start.sh
+
+# Stop everything
+./stop.sh
+
+# Stop and remove all data
+./stop.sh  # Choose 'y' when prompted to remove volumes
+```
+
+### Backend Services
+
+```bash
+# Start backend only
 docker-compose up -d
 
 # Check service health
@@ -530,19 +558,19 @@ docker-compose logs -f rag-query
 # Restart a service
 docker-compose restart document-processor
 
-# Stop all services
+# Stop backend services
 docker-compose down
 
-# Remove all data and restart fresh
+# Remove all data
 docker-compose down -v
-docker-compose up -d
 ```
 
 ### Frontend
 
 ```bash
-# Start development server
+# Start development server (if not using start.sh)
 cd frontend
+npm install
 npm run dev
 
 # Build for production
@@ -636,7 +664,7 @@ LANGFUSE_HOST=https://cloud.langfuse.com
 
 # Application
 LOG_LEVEL=INFO
-CORS_ORIGINS=http://localhost:3000
+CORS_ORIGINS=http://localhost:5173
 ```
 
 ---
@@ -677,6 +705,10 @@ cd frontend && npm run lint
 
 ### Development (Local)
 ```bash
+# Quick start (recommended)
+./start.sh
+
+# Or manually
 docker-compose up -d
 cd frontend && npm run dev
 ```

@@ -121,7 +121,7 @@ export function StudentDashboard() {
   }
 
   return (
-    <PageShell className="py-6 space-y-6">
+    <PageShell className="py-6 space-y-8">
       {/* Header */}
       <TextReveal>
         <PageHeader

@@ -68,15 +68,28 @@ class StudentAnalytics:
         # Recent questions
         recent_questions_cursor = db.questions.find(
             {"student_id": student_id},
-            {"_id": 1, "content_id": 1, "timestamp": 1}
+            {
+                "_id": 0,
+                "question_id": 1,
+                "question_text": 1,
+                "content_id": 1,
+                "timestamp": 1,
+                "question_type": 1,
+                "response_time_ms": 1,
+                "cached": 1
+            }
         ).sort("timestamp", -1).limit(5)
         recent_questions_list = await recent_questions_cursor.to_list(5)
         
         recent_questions = [
             {
-                "question_id": str(q['_id']),
+                "question_id": q.get('question_id', ''),
+                "question_text": q.get('question_text', ''),
                 "content_id": q['content_id'],
-                "timestamp": q['timestamp'].isoformat()
+                "timestamp": q['timestamp'].isoformat(),
+                "question_type": q.get('question_type', 'general'),
+                "response_time_ms": q.get('response_time_ms', 0),
+                "cached": q.get('cached', False)
             }
             for q in recent_questions_list
         ]

@@ -8,6 +8,7 @@ from typing import Dict, Any
 from embeddings.openai_embedder import OpenAIEmbedder
 from vector_store.pinecone_client import PineconeClient
 from shared.database.mongodb_client import mongodb_client
+from shared.database.redis_client import redis_client
 from shared.observability.langfuse_client import langfuse_client
 from shared.exceptions.custom_exceptions import QueueError
 from shared.logging.logger import get_logger
@@ -154,6 +155,29 @@ class EmbeddingWorker:
                     return_document=True  # Return updated document
                 )
                 
+                # Publish progress updates periodically
+                if updated_doc:
+                    processed = updated_doc.get('processed_chunks', 0)
+                    total = updated_doc.get('total_chunks', 0)
+                    
+                    # Publish every 5 chunks or on completion for real-time feedback
+                    if processed % 5 == 0 or processed >= total:
+                        try:
+                            progress = int((processed / total) * 100) if total > 0 else 0
+                            status_update = {
+                                "status": "processing" if processed < total else "completed",
+                                "progress": progress,
+                                "message": f"Vectorizing... {processed}/{total} chunks",
+                                "processed_chunks": processed,
+                                "total_chunks": total
+                            }
+                            
+                            channel = f"document:status:{content_id}"
+                            await redis_client.client.publish(channel, json.dumps(status_update))
+                            logger.debug(f"Published progress to Redis: {channel} - {progress}%")
+                        except Exception as e:
+                            logger.warning(f"Failed to publish progress: {e}")
+                
                 # Check if all chunks are processed using the updated document
                 if updated_doc:
                     processed = updated_doc.get('processed_chunks', 0)
@@ -165,6 +189,22 @@ class EmbeddingWorker:
                             {"$set": {"status": "completed"}}
                         )
                         logger.info(f"Content {content_id} processing completed ({processed}/{total} chunks)")
+                        
+                        # Publish completion status to Redis for WebSocket clients
+                        try:
+                            status_update = {
+                                "status": "completed",
+                                "progress": 100,
+                                "message": "Document ready for chat!",
+                                "processed_chunks": processed,
+                                "total_chunks": total
+                            }
+                            
+                            channel = f"document:status:{content_id}"
+                            await redis_client.client.publish(channel, json.dumps(status_update))
+                            logger.info(f"Published completion to Redis: {channel}")
+                        except Exception as e:
+                            logger.error(f"Failed to publish status to Redis: {e}", exc_info=True)
                 
                 logger.info(f"Successfully processed chunk {chunk_index} for content {content_id}")
                 
